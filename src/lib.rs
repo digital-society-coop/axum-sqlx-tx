@@ -1,7 +1,6 @@
 use std::{
     future::Future,
     ops::{Deref, DerefMut},
-    sync::{Arc, Mutex},
 };
 
 use axum::{
@@ -9,7 +8,7 @@ use axum::{
     http::{Request, StatusCode},
     routing::Route,
 };
-use futures::future::BoxFuture;
+use futures::{channel::oneshot, future::BoxFuture};
 use sqlx::{pool::PoolConnection, Pool};
 
 #[cfg(feature = "mssql")]
@@ -65,8 +64,10 @@ impl<DB: sqlx::Database, B> Clone for Service<DB, B> {
     }
 }
 
-impl<DB: sqlx::Database, B> tower::Service<Request<B>> for Service<DB, B>
+impl<DB, B> tower::Service<Request<B>> for Service<DB, B>
 where
+    DB: sqlx::Database + Send,
+    DB::Connection: Send,
     B: Send + 'static,
 {
     type Response = <Route<B> as tower::Service<Request<B>>>::Response;
@@ -86,18 +87,73 @@ where
         let pool = self.pool.clone();
         Box::pin(async move {
             let connection = pool.acquire().await;
-            req.extensions_mut().insert(Ext {
-                connection_slot: Arc::new(Mutex::new(Some(connection))),
-            });
+            let ext = connection.map_or_else(Ext::error, Ext::connected);
+            req.extensions_mut().insert(ext);
             inner.call(req).await
         })
     }
 }
 
-type ConnectionSlot<DB> = Option<Result<PoolConnection<DB>, sqlx::Error>>;
+enum Ext<DB>
+where
+    // Requirements for Ext to be Send + Sync. We just need to constrain Send since that's all
+    // oneshot::Reveiver needs for it to be Send + Sync.
+    DB: sqlx::Database + Send,
+    DB::Connection: Send,
+{
+    Connected {
+        connection_slot: oneshot::Receiver<PoolConnection<DB>>,
+    },
+    Error {
+        error_slot: Option<sqlx::Error>,
+    },
+}
 
-struct Ext<DB: sqlx::Database> {
-    connection_slot: Arc<Mutex<ConnectionSlot<DB>>>,
+impl<DB> Ext<DB>
+where
+    DB: sqlx::Database + Send,
+    DB::Connection: Send,
+{
+    fn connected(connection: PoolConnection<DB>) -> Self {
+        let (tx, rx) = oneshot::channel();
+        tx.send(connection).unwrap(); // must succeed since it's a fresh channel
+
+        Self::Connected {
+            connection_slot: rx,
+        }
+    }
+
+    fn error(error: sqlx::Error) -> Self {
+        Self::Error {
+            error_slot: Some(error),
+        }
+    }
+
+    fn take_connection(
+        &mut self,
+    ) -> Result<(PoolConnection<DB>, oneshot::Sender<PoolConnection<DB>>), Error> {
+        match self {
+            Self::Error { error_slot } => Err(error_slot
+                .take()
+                .map(Error::Database)
+                .unwrap_or(Error::Overlapping)),
+            Self::Connected { connection_slot } => {
+                // Take the value out of the receiver. There will be no value if we have multiple
+                // overlapping extractors for the same request.
+                let connection = connection_slot
+                    .try_recv()
+                    .ok()
+                    .flatten()
+                    .ok_or(Error::Overlapping);
+
+                connection.map(|connection| {
+                    let (tx, rx) = oneshot::channel();
+                    *connection_slot = rx;
+                    (connection, tx)
+                })
+            }
+        }
+    }
 }
 
 /// An `axum` extractor for a database connection.
@@ -129,23 +185,28 @@ struct Ext<DB: sqlx::Database> {
 ///
 /// # Errors
 ///
-/// You will get an [`Error::Concurrent`] error if you try to extract twice from the same request.
+/// You will get an [`Error::Overlapping`] error if you try to extract twice from the same request.
 #[derive(Debug)]
 pub struct Connection<DB: sqlx::Database> {
-    connection_slot: Arc<Mutex<ConnectionSlot<DB>>>,
-
-    // This must be populated, until dropped
+    // These MUST be populated until drop
     connection: Option<PoolConnection<DB>>,
+    connection_slot: Option<oneshot::Sender<PoolConnection<DB>>>,
 }
 
 impl<DB: sqlx::Database> Drop for Connection<DB> {
     fn drop(&mut self) {
-        if let Ok(mut guard) = self.connection_slot.try_lock() {
-            let _ = guard.insert(Ok(self.connection.take().unwrap()));
-        }
+        let connection = self
+            .connection
+            .take()
+            .expect("BUG: connection empty during drop");
+        let connection_slot = self
+            .connection_slot
+            .take()
+            .expect("BUG: connection_slot empty during drop");
 
-        // We do nothing if we can't immediately acquire the lock, since this would indicate
-        // concurrent extraction for the same request, which we don't support.
+        // oneshot::Sender::send would fail if the receive is dropped, which in this case would mean
+        // the `Ext` was dropped, in which case we have nowhere to send it anyway.
+        let _ = connection_slot.send(connection);
     }
 }
 
@@ -163,8 +224,10 @@ impl<DB: sqlx::Database> DerefMut for Connection<DB> {
     }
 }
 
-impl<DB: sqlx::Database, B> FromRequest<B> for Connection<DB>
+impl<DB, B> FromRequest<B> for Connection<DB>
 where
+    DB: sqlx::Database + Send,
+    DB::Connection: Send,
     B: Send,
 {
     type Rejection = Error;
@@ -183,22 +246,16 @@ where
         Self: 'async_trait,
     {
         Box::pin(async move {
-            let ext: &Ext<DB> = req
-                .extensions()
-                .and_then(|ext| ext.get())
+            let ext: &mut Ext<DB> = req
+                .extensions_mut()
+                .and_then(|ext| ext.get_mut())
                 .ok_or(Error::MissingExtension)?;
 
-            let connection_res = if let Ok(mut guard) = ext.connection_slot.try_lock() {
-                guard.take().ok_or(Error::Concurrent)?
-            } else {
-                return Err(Error::Concurrent);
-            };
-
-            let connection = connection_res.map_err(Error::Database)?;
+            let (connection, connection_slot) = ext.take_connection()?;
 
             Ok(Connection {
-                connection_slot: ext.connection_slot.clone(),
                 connection: Some(connection),
+                connection_slot: Some(connection_slot),
             })
         })
     }
@@ -212,7 +269,7 @@ pub struct Transaction;
 #[derive(Debug)]
 pub enum Error {
     MissingExtension,
-    Concurrent,
+    Overlapping,
     Database(sqlx::Error),
 }
 
@@ -222,8 +279,8 @@ impl axum::response::IntoResponse for Error {
             Self::MissingExtension => {
                 "missing extension; did you register axum_sqlx::Layer?".to_owned()
             }
-            Self::Concurrent => {
-                "request extractor called concurrently, this is unsupported".to_owned()
+            Self::Overlapping => {
+                "cannot extract Connection more than once at the same time".to_owned()
             }
             Self::Database(error) => error.to_string(),
         };
