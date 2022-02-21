@@ -1,0 +1,20 @@
+[package]
+name = "axum-sqlx"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+mssql = ["sqlx/mssql"]
+mysql = ["sqlx/mysql"]
+postgres = ["sqlx/postgres"]
+sqlite = ["sqlx/sqlite"]
+
+[dependencies]
+axum = "0.4.5"
+futures = "0.3.21"
+sqlx = { version = "0.5.11", features = ["runtime-tokio-rustls"] }
+tower = "0.4.12"
+
+[dev-dependencies]
+sqlx = { version = "0.5.11", features = ["postgres", "runtime-tokio-rustls"] }
+tokio = { version = "1.17.0", features = ["macros"] }
