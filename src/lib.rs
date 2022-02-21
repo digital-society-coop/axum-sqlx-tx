@@ -4,7 +4,7 @@ use std::{
 };
 
 use axum::{
-    extract::FromRequest,
+    extract::{FromRequest, RequestParts},
     http::{Request, StatusCode},
     routing::Route,
 };
@@ -64,10 +64,8 @@ impl<DB: sqlx::Database, B> Clone for Service<DB, B> {
     }
 }
 
-impl<DB, B> tower::Service<Request<B>> for Service<DB, B>
+impl<DB: sqlx::Database, B> tower::Service<Request<B>> for Service<DB, B>
 where
-    DB: sqlx::Database + Send,
-    DB::Connection: Send,
     B: Send + 'static,
 {
     type Response = <Route<B> as tower::Service<Request<B>>>::Response;
@@ -94,13 +92,7 @@ where
     }
 }
 
-enum Ext<DB>
-where
-    // Requirements for Ext to be Send + Sync. We just need to constrain Send since that's all
-    // oneshot::Reveiver needs for it to be Send + Sync.
-    DB: sqlx::Database + Send,
-    DB::Connection: Send,
-{
+enum Ext<DB: sqlx::Database> {
     Connected {
         connection_slot: oneshot::Receiver<PoolConnection<DB>>,
     },
@@ -109,11 +101,7 @@ where
     },
 }
 
-impl<DB> Ext<DB>
-where
-    DB: sqlx::Database + Send,
-    DB::Connection: Send,
-{
+impl<DB: sqlx::Database> Ext<DB> {
     fn connected(connection: PoolConnection<DB>) -> Self {
         let (tx, rx) = oneshot::channel();
         tx.send(connection).unwrap(); // must succeed since it's a fresh channel
@@ -193,6 +181,22 @@ pub struct Connection<DB: sqlx::Database> {
     connection_slot: Option<oneshot::Sender<PoolConnection<DB>>>,
 }
 
+impl<DB: sqlx::Database> Connection<DB> {
+    fn extract<B>(req: &mut RequestParts<B>) -> Result<Self, Error> {
+        let ext: &mut Ext<DB> = req
+            .extensions_mut()
+            .and_then(|ext| ext.get_mut())
+            .ok_or(Error::MissingExtension)?;
+
+        let (connection, connection_slot) = ext.take_connection()?;
+
+        Ok(Connection {
+            connection: Some(connection),
+            connection_slot: Some(connection_slot),
+        })
+    }
+}
+
 impl<DB: sqlx::Database> Drop for Connection<DB> {
     fn drop(&mut self) {
         let connection = self
@@ -224,40 +228,17 @@ impl<DB: sqlx::Database> DerefMut for Connection<DB> {
     }
 }
 
-impl<DB, B> FromRequest<B> for Connection<DB>
-where
-    DB: sqlx::Database + Send,
-    DB::Connection: Send,
-    B: Send,
-{
+impl<DB: sqlx::Database, B: Send> FromRequest<B> for Connection<DB> {
     type Rejection = Error;
 
-    fn from_request<'life0, 'async_trait>(
-        req: &'life0 mut axum::extract::RequestParts<B>,
-    ) -> core::pin::Pin<
-        Box<
-            dyn core::future::Future<Output = Result<Self, Self::Rejection>>
-                + core::marker::Send
-                + 'async_trait,
-        >,
-    >
+    fn from_request<'r, 'f>(
+        req: &'r mut RequestParts<B>,
+    ) -> BoxFuture<'f, Result<Self, Self::Rejection>>
     where
-        'life0: 'async_trait,
-        Self: 'async_trait,
+        'r: 'f,
+        Self: 'f,
     {
-        Box::pin(async move {
-            let ext: &mut Ext<DB> = req
-                .extensions_mut()
-                .and_then(|ext| ext.get_mut())
-                .ok_or(Error::MissingExtension)?;
-
-            let (connection, connection_slot) = ext.take_connection()?;
-
-            Ok(Connection {
-                connection: Some(connection),
-                connection_slot: Some(connection_slot),
-            })
-        })
+        Box::pin(async move { Self::extract(req) })
     }
 }
 
