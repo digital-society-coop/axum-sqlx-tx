@@ -4,10 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-mssql = ["sqlx/mssql"]
-mysql = ["sqlx/mysql"]
 postgres = ["sqlx/postgres"]
-sqlite = ["sqlx/sqlite"]
 
 [dependencies]
 axum = "0.4.5"

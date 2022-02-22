@@ -13,17 +13,8 @@ use axum::{
 use futures::{channel::oneshot, future::BoxFuture};
 use sqlx::{pool::PoolConnection, Pool};
 
-#[cfg(feature = "mssql")]
-mod mssql;
-
-#[cfg(feature = "mysql")]
-mod mysql;
-
 #[cfg(feature = "postgres")]
-mod postgres;
-
-#[cfg(feature = "sqlite")]
-mod sqlite;
+mod db;
 
 /// A [`tower::Layer`] that enables the [`Connection`] and [`Transaction`] extractors.
 pub struct Layer<DB: sqlx::Database> {
