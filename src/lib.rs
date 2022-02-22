@@ -81,11 +81,11 @@ where
     }
 
     fn call(&mut self, mut req: Request<B>) -> Self::Future {
+        let ext = Ext::Idle {
+            pool: self.pool.clone(),
+        };
         let mut inner = self.inner.clone();
-        let pool = self.pool.clone();
         Box::pin(async move {
-            let connection = pool.acquire().await;
-            let ext = connection.map_or_else(Ext::error, Ext::connected);
             req.extensions_mut().insert(ext);
             inner.call(req).await
         })
@@ -93,18 +93,58 @@ where
 }
 
 enum Ext<DB: sqlx::Database> {
+    Idle { pool: sqlx::Pool<DB> },
+    Active { state: ExtState<DB> },
+}
+
+impl<DB: sqlx::Database> Ext<DB> {
+    // Get an established connection, or acquire one from the pool.
+    async fn take_or_acquire(
+        &mut self,
+    ) -> Result<(PoolConnection<DB>, oneshot::Sender<Handle<DB>>), Error> {
+        if let Self::Idle { pool } = self {
+            let state = pool
+                .acquire()
+                .await
+                .map_or_else(ExtState::error, ExtState::free);
+            *self = Self::Active { state };
+        }
+
+        let handle = match self {
+            Self::Active { state } => state.take_handle(),
+            Self::Idle { .. } => unreachable!(),
+        };
+
+        handle.and_then(|(handle, slot)| {
+            if let Handle::Cx(connection) = handle {
+                Ok((connection, slot))
+            } else {
+                Err(Error::Mixed)
+            }
+        })
+    }
+
+    // Get an established transaction, or acquire one from the pool.
+    async fn take_or_begin(
+        &mut self,
+    ) -> Result<(sqlx::Transaction<'static, DB>, oneshot::Sender<Handle<DB>>), Error> {
+        todo!()
+    }
+}
+
+enum ExtState<DB: sqlx::Database> {
     Connected {
-        connection_slot: oneshot::Receiver<PoolConnection<DB>>,
+        connection_slot: oneshot::Receiver<Handle<DB>>,
     },
     Error {
         error_slot: Option<sqlx::Error>,
     },
 }
 
-impl<DB: sqlx::Database> Ext<DB> {
-    fn connected(connection: PoolConnection<DB>) -> Self {
+impl<DB: sqlx::Database> ExtState<DB> {
+    fn free(connection: PoolConnection<DB>) -> Self {
         let (tx, rx) = oneshot::channel();
-        tx.send(connection).unwrap(); // must succeed since it's a fresh channel
+        tx.send(Handle::Cx(connection)).unwrap();
 
         Self::Connected {
             connection_slot: rx,
@@ -117,9 +157,7 @@ impl<DB: sqlx::Database> Ext<DB> {
         }
     }
 
-    fn take_connection(
-        &mut self,
-    ) -> Result<(PoolConnection<DB>, oneshot::Sender<PoolConnection<DB>>), Error> {
+    fn take_handle(&mut self) -> Result<(Handle<DB>, oneshot::Sender<Handle<DB>>), Error> {
         match self {
             Self::Error { error_slot } => Err(error_slot
                 .take()
@@ -144,10 +182,18 @@ impl<DB: sqlx::Database> Ext<DB> {
     }
 }
 
+#[derive(Debug)]
+enum Handle<DB: sqlx::Database> {
+    Cx(PoolConnection<DB>),
+    Tx(sqlx::Transaction<'static, DB>),
+}
+
 /// An `axum` extractor for a database connection.
 ///
 /// The connection is taken from the request extensions, and put back on drop. This allows the
-/// connection to be reused across different extractors and middleware.
+/// connection to be reused across different extractors and middleware. Note that there are no
+/// transactional semantics implied – you can use [`Transaction`] if you want a request-bound
+/// transaction.
 ///
 /// To use the extractor, you must register [`Layer`] in your `axum` app.
 ///
@@ -178,17 +224,17 @@ impl<DB: sqlx::Database> Ext<DB> {
 pub struct Connection<DB: sqlx::Database> {
     // These MUST be populated until drop
     connection: Option<PoolConnection<DB>>,
-    connection_slot: Option<oneshot::Sender<PoolConnection<DB>>>,
+    connection_slot: Option<oneshot::Sender<Handle<DB>>>,
 }
 
 impl<DB: sqlx::Database> Connection<DB> {
-    fn extract<B>(req: &mut RequestParts<B>) -> Result<Self, Error> {
+    async fn extract<B>(req: &mut RequestParts<B>) -> Result<Self, Error> {
         let ext: &mut Ext<DB> = req
             .extensions_mut()
             .and_then(|ext| ext.get_mut())
             .ok_or(Error::MissingExtension)?;
 
-        let (connection, connection_slot) = ext.take_connection()?;
+        let (connection, connection_slot) = ext.take_or_acquire().await?;
 
         Ok(Connection {
             connection: Some(connection),
@@ -210,7 +256,7 @@ impl<DB: sqlx::Database> Drop for Connection<DB> {
 
         // oneshot::Sender::send would fail if the receive is dropped, which in this case would mean
         // the `Ext` was dropped, in which case we have nowhere to send it anyway.
-        let _ = connection_slot.send(connection);
+        let _ = connection_slot.send(Handle::Cx(connection));
     }
 }
 
@@ -238,19 +284,26 @@ impl<DB: sqlx::Database, B: Send> FromRequest<B> for Connection<DB> {
         'r: 'f,
         Self: 'f,
     {
-        Box::pin(async move { Self::extract(req) })
+        Box::pin(async move { Self::extract(req).await })
     }
 }
 
 /// An `axum` extractor for a database transaction.
 #[derive(Debug)]
-pub struct Transaction;
+pub struct Transaction<DB: sqlx::Database>(sqlx::Transaction<'static, DB>);
+
+impl<DB: sqlx::Database> Transaction<DB> {
+    async fn extract<B>(req: &mut RequestParts<B>) -> Result<Self, Error> {
+        todo!()
+    }
+}
 
 /// An error returned from an extractor.
 #[derive(Debug)]
 pub enum Error {
     MissingExtension,
     Overlapping,
+    Mixed,
     Database(sqlx::Error),
 }
 
@@ -262,6 +315,9 @@ impl axum::response::IntoResponse for Error {
             }
             Self::Overlapping => {
                 "cannot extract Connection more than once at the same time".to_owned()
+            }
+            Self::Mixed => {
+                "cannot mix Connection and Transaction extractors for the same request".to_owned()
             }
             Self::Database(error) => error.to_string(),
         };
