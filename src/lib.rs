@@ -1,11 +1,13 @@
 use std::{
     future::Future,
     ops::{Deref, DerefMut},
+    sync::RwLock,
 };
 
 use axum::{
     extract::{FromRequest, RequestParts},
     http::{Request, StatusCode},
+    response::IntoResponse,
     routing::Route,
 };
 use futures::{channel::oneshot, future::BoxFuture};
@@ -81,20 +83,56 @@ where
     }
 
     fn call(&mut self, mut req: Request<B>) -> Self::Future {
+        let (tx, mut rx) = oneshot::channel();
         let ext = Ext::Idle {
             pool: self.pool.clone(),
+            back: Some(tx),
         };
         let mut inner = self.inner.clone();
         Box::pin(async move {
             req.extensions_mut().insert(ext);
-            inner.call(req).await
+            let res = RwLock::new(inner.call(req).await);
+
+            // See if the transaction extractor was used
+            if let Some(transaction) = rx.try_recv().ok().flatten() {
+                let success = {
+                    let res = res.read().unwrap();
+                    res.as_ref()
+                        .map(|res| res.status().is_success())
+                        .unwrap_or(false)
+                };
+                if success {
+                    println!("committing!");
+                    if let Err(error) = transaction.commit().await {
+                        return Ok(Error::Database(error).into_response());
+                    }
+                }
+            }
+
+            res.into_inner().unwrap()
         })
     }
 }
 
 enum Ext<DB: sqlx::Database> {
-    Idle { pool: sqlx::Pool<DB> },
-    Active { state: ExtState<DB> },
+    Idle {
+        pool: sqlx::Pool<DB>,
+        back: Option<oneshot::Sender<sqlx::Transaction<'static, DB>>>,
+    },
+    Active {
+        state: ExtState<DB>,
+        back: Option<oneshot::Sender<sqlx::Transaction<'static, DB>>>,
+    },
+}
+
+impl<DB: sqlx::Database> Drop for Ext<DB> {
+    fn drop(&mut self) {
+        if let Self::Active { state, back } = self {
+            if let Some(transaction) = state.take_transaction() {
+                let _ = back.take().unwrap().send(transaction);
+            }
+        }
+    }
 }
 
 impl<DB: sqlx::Database> Ext<DB> {
@@ -102,16 +140,20 @@ impl<DB: sqlx::Database> Ext<DB> {
     async fn take_or_acquire(
         &mut self,
     ) -> Result<(PoolConnection<DB>, oneshot::Sender<Handle<DB>>), Error> {
-        if let Self::Idle { pool } = self {
+        if let Self::Idle { pool, back } = self {
             let state = pool
                 .acquire()
                 .await
-                .map_or_else(ExtState::error, ExtState::free);
-            *self = Self::Active { state };
+                .map(Handle::Cx)
+                .map_or_else(ExtState::error, ExtState::connected);
+            *self = Self::Active {
+                state,
+                back: Some(back.take().unwrap()),
+            };
         }
 
         let handle = match self {
-            Self::Active { state } => state.take_handle(),
+            Self::Active { state, .. } => state.take_handle(),
             Self::Idle { .. } => unreachable!(),
         };
 
@@ -128,7 +170,30 @@ impl<DB: sqlx::Database> Ext<DB> {
     async fn take_or_begin(
         &mut self,
     ) -> Result<(sqlx::Transaction<'static, DB>, oneshot::Sender<Handle<DB>>), Error> {
-        todo!()
+        if let Self::Idle { pool, back } = self {
+            let state = pool
+                .begin()
+                .await
+                .map(Handle::Tx)
+                .map_or_else(ExtState::error, ExtState::connected);
+            *self = Self::Active {
+                state,
+                back: Some(back.take().unwrap()),
+            };
+        }
+
+        let handle = match self {
+            Self::Active { state, .. } => state.take_handle(),
+            Self::Idle { .. } => unreachable!(),
+        };
+
+        handle.and_then(|(handle, slot)| {
+            if let Handle::Tx(transaction) = handle {
+                Ok((transaction, slot))
+            } else {
+                Err(Error::Mixed)
+            }
+        })
     }
 }
 
@@ -142,9 +207,9 @@ enum ExtState<DB: sqlx::Database> {
 }
 
 impl<DB: sqlx::Database> ExtState<DB> {
-    fn free(connection: PoolConnection<DB>) -> Self {
+    fn connected(handle: Handle<DB>) -> Self {
         let (tx, rx) = oneshot::channel();
-        tx.send(Handle::Cx(connection)).unwrap();
+        tx.send(handle).unwrap();
 
         Self::Connected {
             connection_slot: rx,
@@ -179,6 +244,15 @@ impl<DB: sqlx::Database> ExtState<DB> {
                 })
             }
         }
+    }
+
+    fn take_transaction(&mut self) -> Option<sqlx::Transaction<'static, DB>> {
+        if let Self::Connected { connection_slot } = self {
+            if let Ok(Some(Handle::Tx(tx))) = connection_slot.try_recv() {
+                return Some(tx);
+            }
+        }
+        None
     }
 }
 
@@ -290,11 +364,70 @@ impl<DB: sqlx::Database, B: Send> FromRequest<B> for Connection<DB> {
 
 /// An `axum` extractor for a database transaction.
 #[derive(Debug)]
-pub struct Transaction<DB: sqlx::Database>(sqlx::Transaction<'static, DB>);
+pub struct Transaction<DB: sqlx::Database> {
+    // These MUST be populated until drop
+    transaction: Option<sqlx::Transaction<'static, DB>>,
+    connection_slot: Option<oneshot::Sender<Handle<DB>>>,
+}
 
 impl<DB: sqlx::Database> Transaction<DB> {
     async fn extract<B>(req: &mut RequestParts<B>) -> Result<Self, Error> {
-        todo!()
+        let ext: &mut Ext<DB> = req
+            .extensions_mut()
+            .and_then(|ext| ext.get_mut())
+            .ok_or(Error::MissingExtension)?;
+
+        let (transaction, connection_slot) = ext.take_or_begin().await?;
+
+        Ok(Transaction {
+            transaction: Some(transaction),
+            connection_slot: Some(connection_slot),
+        })
+    }
+}
+
+impl<DB: sqlx::Database> Drop for Transaction<DB> {
+    fn drop(&mut self) {
+        let transaction = self
+            .transaction
+            .take()
+            .expect("BUG: connection empty during drop");
+        let connection_slot = self
+            .connection_slot
+            .take()
+            .expect("BUG: connection_slot empty during drop");
+
+        // oneshot::Sender::send would fail if the receive is dropped, which in this case would mean
+        // the `Ext` was dropped, in which case we have nowhere to send it anyway.
+        let _ = connection_slot.send(Handle::Tx(transaction));
+    }
+}
+
+impl<DB: sqlx::Database> Deref for Transaction<DB> {
+    type Target = sqlx::Transaction<'static, DB>;
+
+    fn deref(&self) -> &Self::Target {
+        self.transaction.as_ref().unwrap()
+    }
+}
+
+impl<DB: sqlx::Database> DerefMut for Transaction<DB> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.transaction.as_mut().unwrap()
+    }
+}
+
+impl<DB: sqlx::Database, B: Send> FromRequest<B> for Transaction<DB> {
+    type Rejection = Error;
+
+    fn from_request<'r, 'f>(
+        req: &'r mut RequestParts<B>,
+    ) -> BoxFuture<'f, Result<Self, Self::Rejection>>
+    where
+        'r: 'f,
+        Self: 'f,
+    {
+        Box::pin(async move { Self::extract(req).await })
     }
 }
 
@@ -327,18 +460,26 @@ impl axum::response::IntoResponse for Error {
 
 #[cfg(test)]
 mod tests {
-    use std::env;
+    use std::{
+        env,
+        marker::PhantomData,
+        ops::{Deref, DerefMut},
+    };
 
     use axum::extract::FromRequest;
-    use sqlx::{Connection as _, PgPool, Postgres};
+    use sqlx::{PgPool, Postgres};
 
-    use crate::{Connection, Error, Layer};
+    use crate::{Connection, Error, Layer, Transaction};
 
-    struct Auth;
+    struct Auth<E>(PhantomData<E>);
 
-    impl<B> FromRequest<B> for Auth
+    impl<B, E, H, C> FromRequest<B> for Auth<E>
     where
-        B: Send,
+        B: Send + 'static,
+        E: FromRequest<B> + Deref<Target = H> + DerefMut + Send,
+        E::Rejection: std::fmt::Debug + Send,
+        H: Deref<Target = C> + DerefMut + Send,
+        C: sqlx::Connection,
     {
         type Rejection = Error;
 
@@ -356,19 +497,48 @@ mod tests {
             Self: 'async_trait,
         {
             Box::pin(async move {
-                let mut c = Connection::<Postgres>::from_request(req).await.unwrap();
+                let mut c = E::from_request(req).await.unwrap();
                 c.ping().await.unwrap();
 
-                Ok(Auth)
+                Ok(Auth(PhantomData))
             })
         }
     }
 
     #[tokio::test]
-    async fn test_name() {
-        async fn handler(_auth: Auth, mut c: Connection<Postgres>) -> String {
+    #[ignore]
+    async fn connection() {
+        async fn handler(_auth: Auth<Connection<Postgres>>, mut c: Connection<Postgres>) -> String {
             let (message,): (String,) = sqlx::query_as("SELECT 'hello world'")
                 .fetch_one(&mut c)
+                .await
+                .unwrap();
+            message
+        }
+
+        let pool = PgPool::connect(&env::var("DATABASE_URL").unwrap())
+            .await
+            .unwrap();
+
+        let app = axum::Router::new()
+            .route("/", axum::routing::get(handler))
+            .route_layer(Layer::new(pool));
+
+        let server = axum::Server::bind(&([0, 0, 0, 0], 0).into()).serve(app.into_make_service());
+        println!("serving {}", server.local_addr());
+
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn transaction() {
+        async fn handler(
+            _auth: Auth<Transaction<Postgres>>,
+            mut tx: Transaction<Postgres>,
+        ) -> String {
+            let (message,): (String,) = sqlx::query_as("SELECT 'hello world'")
+                .fetch_one(&mut tx)
                 .await
                 .unwrap();
             message
