@@ -94,6 +94,7 @@ impl<T> Slot<T> {
 /// A lease of a value from a [`Slot`].
 ///
 /// See the [module documentation](crate::slot) for more information.
+#[derive(Debug)]
 pub struct Lease<T> {
     // INVARIANT: must be Some until dropped or stolen
     value: Option<T>,

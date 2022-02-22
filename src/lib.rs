@@ -14,6 +14,10 @@ use futures::{channel::oneshot, future::BoxFuture};
 
 #[cfg(feature = "postgres")]
 mod db;
+#[doc(hidden)]
+pub mod slot;
+
+use crate::slot::{Lease, Slot};
 
 /// A [`tower::Layer`] that enables the [`Connection`] and [`Transaction`] extractors.
 pub struct Layer<DB: sqlx::Database> {
@@ -110,7 +114,8 @@ enum Ext<DB: sqlx::Database> {
         back: Option<oneshot::Sender<sqlx::Transaction<'static, DB>>>,
     },
     Active {
-        state: ExtState<DB>,
+        // INVARIANT: must be Some until drop
+        state: Option<ExtState<DB>>,
         back: Option<oneshot::Sender<sqlx::Transaction<'static, DB>>>,
     },
 }
@@ -118,7 +123,7 @@ enum Ext<DB: sqlx::Database> {
 impl<DB: sqlx::Database> Drop for Ext<DB> {
     fn drop(&mut self) {
         if let Self::Active { state, back } = self {
-            if let Some(transaction) = state.take_transaction() {
+            if let Some(transaction) = state.take().unwrap().take_transaction() {
                 let _ = back.take().unwrap().send(transaction);
             }
         }
@@ -127,28 +132,20 @@ impl<DB: sqlx::Database> Drop for Ext<DB> {
 
 impl<DB: sqlx::Database> Ext<DB> {
     // Get an established transaction, or acquire one from the pool.
-    async fn take_or_begin(
-        &mut self,
-    ) -> Result<
-        (
-            sqlx::Transaction<'static, DB>,
-            oneshot::Sender<sqlx::Transaction<'static, DB>>,
-        ),
-        Error,
-    > {
+    async fn take_or_begin(&mut self) -> Result<Lease<sqlx::Transaction<'static, DB>>, Error> {
         if let Self::Idle { pool, back } = self {
             let state = pool
                 .begin()
                 .await
                 .map_or_else(ExtState::error, ExtState::connected);
             *self = Self::Active {
-                state,
+                state: Some(state),
                 back: Some(back.take().unwrap()),
             };
         }
 
         match self {
-            Self::Active { state, .. } => state.take_handle(),
+            Self::Active { state, .. } => state.as_mut().unwrap().take_handle(),
             Self::Idle { .. } => unreachable!(),
         }
     }
@@ -156,7 +153,7 @@ impl<DB: sqlx::Database> Ext<DB> {
 
 enum ExtState<DB: sqlx::Database> {
     Connected {
-        connection_slot: oneshot::Receiver<sqlx::Transaction<'static, DB>>,
+        connection_slot: Slot<sqlx::Transaction<'static, DB>>,
     },
     Error {
         error_slot: Option<sqlx::Error>,
@@ -165,12 +162,8 @@ enum ExtState<DB: sqlx::Database> {
 
 impl<DB: sqlx::Database> ExtState<DB> {
     fn connected(handle: sqlx::Transaction<'static, DB>) -> Self {
-        let (tx, rx) = oneshot::channel();
-        tx.send(handle).unwrap();
-
-        Self::Connected {
-            connection_slot: rx,
-        }
+        let connection_slot = Slot::new(handle);
+        Self::Connected { connection_slot }
     }
 
     fn error(error: sqlx::Error) -> Self {
@@ -179,55 +172,31 @@ impl<DB: sqlx::Database> ExtState<DB> {
         }
     }
 
-    fn take_handle(
-        &mut self,
-    ) -> Result<
-        (
-            sqlx::Transaction<'static, DB>,
-            oneshot::Sender<sqlx::Transaction<'static, DB>>,
-        ),
-        Error,
-    > {
+    fn take_handle(&mut self) -> Result<Lease<sqlx::Transaction<'static, DB>>, Error> {
         match self {
             Self::Error { error_slot } => Err(error_slot
                 .take()
                 .map(Error::Database)
                 .unwrap_or(Error::Overlapping)),
             Self::Connected { connection_slot } => {
-                // Take the value out of the receiver. There will be no value if we have multiple
-                // overlapping extractors for the same request.
-                let connection = connection_slot
-                    .try_recv()
-                    .ok()
-                    .flatten()
-                    .ok_or(Error::Overlapping);
-
-                connection.map(|connection| {
-                    let (tx, rx) = oneshot::channel();
-                    *connection_slot = rx;
-                    (connection, tx)
-                })
+                // There will be no value when using multiple extractors for the same request.
+                connection_slot.lease().ok_or(Error::Overlapping)
             }
         }
     }
 
-    fn take_transaction(&mut self) -> Option<sqlx::Transaction<'static, DB>> {
+    fn take_transaction(self) -> Option<sqlx::Transaction<'static, DB>> {
         if let Self::Connected { connection_slot } = self {
-            if let Ok(Some(tx)) = connection_slot.try_recv() {
-                return Some(tx);
-            }
+            connection_slot.into_inner()
+        } else {
+            None
         }
-        None
     }
 }
 
 /// An `axum` extractor for a database transaction.
 #[derive(Debug)]
-pub struct Transaction<DB: sqlx::Database> {
-    // These MUST be populated until drop
-    transaction: Option<sqlx::Transaction<'static, DB>>,
-    connection_slot: Option<oneshot::Sender<sqlx::Transaction<'static, DB>>>,
-}
+pub struct Transaction<DB: sqlx::Database>(Lease<sqlx::Transaction<'static, DB>>);
 
 impl<DB: sqlx::Database> Transaction<DB> {
     async fn extract<B>(req: &mut RequestParts<B>) -> Result<Self, Error> {
@@ -236,29 +205,9 @@ impl<DB: sqlx::Database> Transaction<DB> {
             .and_then(|ext| ext.get_mut())
             .ok_or(Error::MissingExtension)?;
 
-        let (transaction, connection_slot) = ext.take_or_begin().await?;
+        let transaction = ext.take_or_begin().await?;
 
-        Ok(Transaction {
-            transaction: Some(transaction),
-            connection_slot: Some(connection_slot),
-        })
-    }
-}
-
-impl<DB: sqlx::Database> Drop for Transaction<DB> {
-    fn drop(&mut self) {
-        let transaction = self
-            .transaction
-            .take()
-            .expect("BUG: connection empty during drop");
-        let connection_slot = self
-            .connection_slot
-            .take()
-            .expect("BUG: connection_slot empty during drop");
-
-        // oneshot::Sender::send would fail if the receive is dropped, which in this case would mean
-        // the `Ext` was dropped, in which case we have nowhere to send it anyway.
-        let _ = connection_slot.send(transaction);
+        Ok(Transaction(transaction))
     }
 }
 
@@ -266,13 +215,13 @@ impl<DB: sqlx::Database> Deref for Transaction<DB> {
     type Target = sqlx::Transaction<'static, DB>;
 
     fn deref(&self) -> &Self::Target {
-        self.transaction.as_ref().unwrap()
+        &self.0
     }
 }
 
 impl<DB: sqlx::Database> DerefMut for Transaction<DB> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.transaction.as_mut().unwrap()
+        &mut self.0
     }
 }
 

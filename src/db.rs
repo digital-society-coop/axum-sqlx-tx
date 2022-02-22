@@ -28,7 +28,7 @@ impl<'c> sqlx::Executor<'c> for &'c mut Transaction<sqlx::Postgres> {
         'c: 'e,
         E: sqlx::Execute<'q, Self::Database>,
     {
-        self.transaction.as_mut().unwrap().fetch_many(query)
+        (&mut **self).fetch_many(query)
     }
 
     fn fetch_optional<'e, 'q: 'e, E: 'q>(
@@ -39,7 +39,7 @@ impl<'c> sqlx::Executor<'c> for &'c mut Transaction<sqlx::Postgres> {
         'c: 'e,
         E: sqlx::Execute<'q, Self::Database>,
     {
-        self.transaction.as_mut().unwrap().fetch_optional(query)
+        (&mut **self).fetch_optional(query)
     }
 
     fn prepare_with<'e, 'q: 'e>(
@@ -53,10 +53,7 @@ impl<'c> sqlx::Executor<'c> for &'c mut Transaction<sqlx::Postgres> {
     where
         'c: 'e,
     {
-        self.transaction
-            .as_mut()
-            .unwrap()
-            .prepare_with(sql, parameters)
+        (&mut **self).prepare_with(sql, parameters)
     }
 
     fn describe<'e, 'q: 'e>(
@@ -66,6 +63,6 @@ impl<'c> sqlx::Executor<'c> for &'c mut Transaction<sqlx::Postgres> {
     where
         'c: 'e,
     {
-        self.transaction.as_mut().unwrap().describe(sql)
+        (&mut **self).describe(sql)
     }
 }
