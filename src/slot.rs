@@ -5,7 +5,7 @@
 //! leased to one other owner through an associated `Lease<T>`.
 //!
 //! ```
-//! use axum_sqlx::slot::Slot;
+//! use axum_sqlx_tx::slot::Slot;
 //!
 //! // Create a slot containing a resource.
 //! let mut slot = Slot::new("Hello".to_string());
@@ -31,7 +31,7 @@
 //! the slot empty.
 //!
 //! ```
-//! use axum_sqlx::slot::Slot;
+//! use axum_sqlx_tx::slot::Slot;
 //!
 //! let mut slot = Slot::new("Hello".to_string());
 //!

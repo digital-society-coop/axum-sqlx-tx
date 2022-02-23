@@ -15,10 +15,10 @@ pub use crate::{
 /// An error returned from an extractor.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("required extension not registered; did you add the axum_sqlx::Layer middleware?")]
+    #[error("required extension not registered; did you add the axum_sqlx_tx::Layer middleware?")]
     MissingExtension,
 
-    #[error("axum_sqlx::Transaction extractor used multiple times in the same handler/middleware")]
+    #[error("axum_sqlx_tx::Transaction extractor used multiple times in the same handler/middleware")]
     OverlappingExtractors,
 
     #[error(transparent)]
