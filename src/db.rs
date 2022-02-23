@@ -1,13 +1,13 @@
 //! Implementations of `sqlx` traits for extractors with known `sqlx::Database` types.
 //!
-//! Implementing the `sqlx` traits on the [`Transaction`](crate::Transaction) extractor makes it
-//! more ergonomic to use in common situations, such as supplying an executor for `QueryAs`.
+//! Implementing the `sqlx` traits on the [`Tx`](crate::Tx) extractor makes it more ergonomic to use
+//! in common situations, such as supplying an executor for `QueryAs`.
 
 use futures::{future::BoxFuture, stream::BoxStream};
 
-use crate::Transaction;
+use crate::Tx;
 
-impl<'c> sqlx::Executor<'c> for &'c mut Transaction<sqlx::Postgres> {
+impl<'c> sqlx::Executor<'c> for &'c mut Tx<sqlx::Postgres> {
     type Database = sqlx::Postgres;
 
     #[allow(clippy::type_complexity)]

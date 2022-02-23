@@ -7,11 +7,16 @@ edition = "2021"
 postgres = ["sqlx/postgres"]
 
 [dependencies]
-axum = "0.4.5"
+axum-core = "0.1.2"
 futures = "0.3.21"
-sqlx = { version = "0.5.11", features = ["runtime-tokio-rustls"] }
-tower = "0.4.12"
+http = "0.2.6"
+sqlx = { version = "0.5.11", default-features = false }
+thiserror = "1.0.30"
+tower-layer = "0.3.1"
+tower-service = "0.3.1"
 
 [dev-dependencies]
+axum = "0.4.5"
 sqlx = { version = "0.5.11", features = ["postgres", "runtime-tokio-rustls"] }
 tokio = { version = "1.17.0", features = ["macros"] }
+tower = "0.4.12"
