@@ -63,8 +63,9 @@ impl<DB: sqlx::Database, B: Send> FromRequest<B> for Tx<DB> {
 
 /// Possible errors when extracting [`Tx`] from a request.
 ///
-/// `axum` requires the [`FromRequest`] `Rejection` implements `IntoResponse`, which this does by...
-/// stack overflowing (bug).
+/// `axum` requires the [`FromRequest`] `Rejection` implements `IntoResponse`, which this does by
+/// returning the `Display` representation of the variant. Note that this means returning database
+/// errors to clients, which isn't great, but there's not an obvious alternative.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("required extension not registered; did you add the axum_sqlx_tx::Layer middleware?")]
@@ -79,7 +80,7 @@ pub enum Error {
 
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
-        Err::<(), _>(self).into_response()
+        self.to_string().into_response()
     }
 }
 
