@@ -12,6 +12,20 @@ use crate::slot::{Lease, Slot};
 #[derive(Debug)]
 pub struct Tx<DB: sqlx::Database>(Lease<sqlx::Transaction<'static, DB>>);
 
+impl<DB: sqlx::Database> Tx<DB> {
+    /// Explicitly commit the transaction.
+    ///
+    /// By default, the transaction will be committed when a successful response is returned
+    /// (specifically, when the [`Service`](crate::Service) middleware intercepts an HTTP `2XX`
+    /// response). This method allows the transaction to be committed explicitly.
+    ///
+    /// **Note:** trying to use the `Tx` extractor again after calling `commit` will currently
+    /// generate [`Error::OverlappingExtractor`] errors.
+    pub async fn commit(self) -> Result<(), sqlx::Error> {
+        self.0.steal().commit().await
+    }
+}
+
 impl<DB: sqlx::Database> AsRef<sqlx::Transaction<'static, DB>> for Tx<DB> {
     fn as_ref(&self) -> &sqlx::Transaction<'static, DB> {
         &self.0
