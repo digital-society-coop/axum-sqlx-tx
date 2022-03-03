@@ -17,7 +17,9 @@ pub enum Error {
     #[error("required extension not registered; did you add the axum_sqlx_tx::Layer middleware?")]
     MissingExtension,
 
-    #[error("axum_sqlx_tx::Transaction extractor used multiple times in the same handler/middleware")]
+    #[error(
+        "axum_sqlx_tx::Transaction extractor used multiple times in the same handler/middleware"
+    )]
     OverlappingExtractors,
 
     #[error(transparent)]
