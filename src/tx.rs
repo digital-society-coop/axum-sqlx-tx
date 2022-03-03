@@ -1,12 +1,12 @@
 //! A request extension that enables the [`Tx`](crate::Tx) extractor.
 
-use axum_core::extract::{FromRequest, RequestParts};
+use axum_core::{
+    extract::{FromRequest, RequestParts},
+    response::{IntoResponse, Response},
+};
 use sqlx::Transaction;
 
-use crate::{
-    slot::{Lease, Slot},
-    Error,
-};
+use crate::slot::{Lease, Slot};
 
 /// An `axum` extractor for a database transaction.
 #[derive(Debug)]
@@ -58,6 +58,28 @@ impl<DB: sqlx::Database, B: Send> FromRequest<B> for Tx<DB> {
 
             Ok(Self(tx))
         })
+    }
+}
+
+/// Possible errors when extracting [`Tx`] from a request.
+///
+/// `axum` requires the [`FromRequest`] `Rejection` implements `IntoResponse`, which this does by...
+/// stack overflowing (bug).
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("required extension not registered; did you add the axum_sqlx_tx::Layer middleware?")]
+    MissingExtension,
+
+    #[error("axum_sqlx_tx::Tx extractor used multiple times in the same handler/middleware")]
+    OverlappingExtractors,
+
+    #[error(transparent)]
+    Database(#[from] sqlx::Error),
+}
+
+impl IntoResponse for Error {
+    fn into_response(self) -> Response {
+        Err::<(), _>(self).into_response()
     }
 }
 

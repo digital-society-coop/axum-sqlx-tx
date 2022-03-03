@@ -1,5 +1,3 @@
-use axum_core::response::{IntoResponse, Response};
-
 #[cfg(feature = "postgres")]
 mod db;
 mod layer;
@@ -8,29 +6,8 @@ mod tx;
 
 pub use crate::{
     layer::{Layer, Service},
-    tx::Tx,
+    tx::{Error, Tx},
 };
-
-/// An error returned from an extractor.
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("required extension not registered; did you add the axum_sqlx_tx::Layer middleware?")]
-    MissingExtension,
-
-    #[error(
-        "axum_sqlx_tx::Transaction extractor used multiple times in the same handler/middleware"
-    )]
-    OverlappingExtractors,
-
-    #[error(transparent)]
-    Database(#[from] sqlx::Error),
-}
-
-impl IntoResponse for Error {
-    fn into_response(self) -> Response {
-        Err::<std::convert::Infallible, _>(self).into_response()
-    }
-}
 
 #[cfg(test)]
 mod tests {
