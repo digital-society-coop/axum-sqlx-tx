@@ -4,8 +4,7 @@ use axum_core::response::{IntoResponse, Response};
 mod db;
 mod extractor;
 mod layer;
-#[doc(hidden)]
-pub mod slot;
+mod slot;
 
 pub use crate::{
     extractor::Tx,

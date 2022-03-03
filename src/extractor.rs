@@ -18,15 +18,8 @@ pub(crate) struct Extension<DB: sqlx::Database> {
 
 impl<DB: sqlx::Database> Extension<DB> {
     pub(crate) fn new(pool: sqlx::Pool<DB>) -> (Self, TxSlot<DB>) {
-        let mut slot = Slot::new(None);
-        (
-            Self {
-                pool,
-                // We can unwrap here because we just populated the slot
-                tx: slot.lease().unwrap(),
-            },
-            TxSlot(slot),
-        )
+        let (slot, tx) = Slot::new_leased(None);
+        (Self { pool, tx }, TxSlot(slot))
     }
 
     pub(crate) async fn get_or_begin(&mut self) -> Result<Lease<Transaction<'static, DB>>, Error> {
