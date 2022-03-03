@@ -1,5 +1,3 @@
-#[cfg(feature = "postgres")]
-mod db;
 mod layer;
 mod slot;
 mod tx;
