@@ -12,6 +12,18 @@ use crate::{
 #[derive(Debug)]
 pub struct Tx<DB: sqlx::Database>(Lease<sqlx::Transaction<'static, DB>>);
 
+impl<DB: sqlx::Database> AsRef<sqlx::Transaction<'static, DB>> for Tx<DB> {
+    fn as_ref(&self) -> &sqlx::Transaction<'static, DB> {
+        &self.0
+    }
+}
+
+impl<DB: sqlx::Database> AsMut<sqlx::Transaction<'static, DB>> for Tx<DB> {
+    fn as_mut(&mut self) -> &mut sqlx::Transaction<'static, DB> {
+        &mut self.0
+    }
+}
+
 impl<DB: sqlx::Database> std::ops::Deref for Tx<DB> {
     type Target = sqlx::Transaction<'static, DB>;
 
