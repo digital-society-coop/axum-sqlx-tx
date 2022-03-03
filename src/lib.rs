@@ -2,13 +2,13 @@ use axum_core::response::{IntoResponse, Response};
 
 #[cfg(feature = "postgres")]
 mod db;
-mod extractor;
 mod layer;
 mod slot;
+mod tx;
 
 pub use crate::{
-    extractor::Tx,
     layer::{Layer, Service},
+    tx::Tx,
 };
 
 /// An error returned from an extractor.

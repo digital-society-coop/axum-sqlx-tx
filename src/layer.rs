@@ -2,7 +2,7 @@
 
 use futures::future::BoxFuture;
 
-use crate::{extractor::Extension, Error};
+use crate::{tx::TxSlot, Error};
 
 /// A [`tower_layer::Layer`] that enables the [`Tx`](crate::Tx) extractor.
 ///
@@ -76,8 +76,7 @@ where
     }
 
     fn call(&mut self, mut req: http::Request<ReqBody>) -> Self::Future {
-        let (ext, transaction) = Extension::new(self.pool.clone());
-        req.extensions_mut().insert(ext);
+        let transaction = TxSlot::bind(req.extensions_mut(), self.pool.clone());
 
         let res = self.inner.call(req);
 
@@ -85,9 +84,7 @@ where
             let res = res.await.unwrap(); // inner service is infallible
 
             if res.status().is_success() {
-                if let Some(transaction) = transaction.into_inner() {
-                    transaction.commit().await?;
-                }
+                transaction.commit().await?;
             }
 
             Ok(res)
