@@ -97,7 +97,7 @@ impl<DB: sqlx::Database> TxSlot<DB> {
         Self(slot)
     }
 
-    pub(crate) async fn commit(self) -> Result<(), Error> {
+    pub(crate) async fn commit(self) -> Result<(), sqlx::Error> {
         if let Some(tx) = self.0.into_inner().flatten().and_then(Slot::into_inner) {
             tx.commit().await?;
         }

@@ -76,7 +76,9 @@ mod tests {
             .route("/", axum::routing::get(handler))
             .route_layer(
                 ServiceBuilder::new()
-                    .layer(HandleErrorLayer::new(|error: Error| async move { error }))
+                    .layer(HandleErrorLayer::new(|error: sqlx::Error| async move {
+                        error.to_string()
+                    }))
                     .layer(Layer::new(pool)),
             );
 

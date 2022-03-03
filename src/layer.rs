@@ -2,7 +2,7 @@
 
 use futures::future::BoxFuture;
 
-use crate::{tx::TxSlot, Error};
+use crate::tx::TxSlot;
 
 /// A [`tower_layer::Layer`] that enables the [`Tx`](crate::Tx) extractor.
 ///
@@ -65,7 +65,7 @@ where
     ResBody: Send,
 {
     type Response = S::Response;
-    type Error = Error;
+    type Error = sqlx::Error;
     type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
     fn poll_ready(
@@ -97,8 +97,6 @@ mod tests {
     use axum::error_handling::HandleErrorLayer;
     use tower::ServiceBuilder;
 
-    use crate::Error;
-
     use super::Layer;
 
     // The trait shenanigans required by axum for layers are significant, so this "test" ensures
@@ -111,7 +109,7 @@ mod tests {
             .route("/", axum::routing::get(|| async { "hello" }))
             .layer(
                 ServiceBuilder::new()
-                    .layer(HandleErrorLayer::new(|_: Error| async {}))
+                    .layer(HandleErrorLayer::new(|_: sqlx::Error| async {}))
                     .layer(Layer::new(pool)),
             );
 
