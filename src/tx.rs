@@ -177,7 +177,7 @@ pub enum Error {
 
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
-        self.to_string().into_response()
+        (http::StatusCode::INTERNAL_SERVER_ERROR, self.to_string()).into_response()
     }
 }
 

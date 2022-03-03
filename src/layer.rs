@@ -44,6 +44,7 @@ pub struct Service<DB: sqlx::Database, S> {
     inner: S,
 }
 
+// can't simply derive because `DB` isn't `Clone`
 impl<DB: sqlx::Database, S: Clone> Clone for Service<DB, S> {
     fn clone(&self) -> Self {
         Self {
@@ -103,7 +104,7 @@ mod tests {
     // we've got it right.
     #[allow(unused, unreachable_code, clippy::diverging_sub_expression)]
     fn layer_compiles() {
-        let pool: sqlx::Pool<sqlx::Postgres> = todo!();
+        let pool: sqlx::Pool<sqlx::Sqlite> = todo!();
 
         let app = axum::Router::new()
             .route("/", axum::routing::get(|| async { "hello" }))

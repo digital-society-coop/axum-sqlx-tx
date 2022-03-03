@@ -12,6 +12,10 @@ mysql = ["sqlx/mysql"]
 postgres = ["sqlx/postgres"]
 sqlite = ["sqlx/sqlite"]
 
+[[test]]
+name = "lib"
+required-features = ["sqlite"]
+
 [dependencies]
 axum-core = "0.1.2"
 futures = "0.3.21"
@@ -23,6 +27,8 @@ tower-service = "0.3.1"
 
 [dev-dependencies]
 axum = "0.4.5"
-sqlx = { version = "0.5.11", features = ["postgres", "runtime-tokio-rustls"] }
+hyper = "0.14.17"
+sqlx = { version = "0.5.11", features = ["sqlite", "runtime-tokio-rustls"] }
+tempfile = "3.3.0"
 tokio = { version = "1.17.0", features = ["macros"] }
 tower = "0.4.12"
