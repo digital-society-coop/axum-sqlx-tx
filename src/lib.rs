@@ -19,7 +19,7 @@
 //!
 //! To use the [`Tx`] extractor, you must first add [`Layer`] to your app:
 //!
-//! ```no_run
+//! ```
 //! # async fn foo() {
 //! let pool = /* any sqlx::Pool */
 //! # sqlx::SqlitePool::connect(todo!()).await.unwrap();
@@ -32,7 +32,7 @@
 //!
 //! You can then simply add [`Tx`] as an argument to your handlers:
 //!
-//! ```no_run
+//! ```
 //! use axum_sqlx_tx::Tx;
 //! use sqlx::Sqlite;
 //!
@@ -55,6 +55,56 @@
 //! you have multiple `Tx` arguments in a single handler, or call `Tx::from_request` multiple times
 //! in a single middleware.
 //!
+//! ## Error handling
+//!
+//! `axum` requires that middleware do not return errors, and that the errors returned by extractors
+//! implement `IntoResponse`. By default, [`Error`](Error) is used by [`Layer`] and [`Tx`] to
+//! convert errors into HTTP 500 responses, with the error's `Display` value as the response body,
+//! however it's generally not a good practice to return internal error details to clients!
+//!
+//! To make it easier to customise error handling, both [`Layer`] and [`Tx`] have a second generic
+//! type parameter, `E`, that can be used to override the error type that will be used to convert
+//! the response.
+//!
+//! ```
+//! use axum::response::IntoResponse;
+//! use axum_sqlx_tx::Tx;
+//! use sqlx::Sqlite;
+//!
+//! struct MyError(axum_sqlx_tx::Error);
+//!
+//! // Errors must implement From<axum_sqlx_tx::Error>
+//! impl From<axum_sqlx_tx::Error> for MyError {
+//!     fn from(error: axum_sqlx_tx::Error) -> Self {
+//!         Self(error)
+//!     }
+//! }
+//!
+//! // Errors must implement IntoResponse
+//! impl IntoResponse for MyError {
+//!     fn into_response(self) -> axum::response::Response {
+//!         // note that you would probably want to log the error or something
+//!         (http::StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
+//!     }
+//! }
+//!
+//! // Change the layer error type
+//! # async fn foo() {
+//! # let pool: sqlx::SqlitePool = todo!();
+//! let app = axum::Router::new()
+//!     // .route(...)s
+//!     .layer(axum_sqlx_tx::Layer::new_with_error::<MyError>(pool));
+//! # axum::Server::bind(todo!()).serve(app.into_make_service());
+//! # }
+//!
+//! // Change the extractor error type
+//! async fn create_user(mut tx: Tx<Sqlite, MyError>, /* ... */) {
+//!     /* ... */
+//! }
+//! ```
+//!
+//! # Examples
+//!
 //! See [`examples/`][examples] in the repo for more examples.
 //!
 //! [examples]: https://github.com/wasdacraic/axum-sqlx-tx/tree/master/examples
@@ -72,26 +122,34 @@ pub use crate::{
 
 /// Possible errors when extracting [`Tx`] from a request.
 ///
-/// `axum` requires that the [`FromRequest`] `Rejection` implements `IntoResponse`, which this does
+/// `axum` requires that the `FromRequest` `Rejection` implements `IntoResponse`, which this does
 /// by returning the `Display` representation of the variant. Note that this means returning
-/// configuration and database errors to clients, but there's sadly not currently a better default
-/// (open to feedback on this).
-///
-/// You could avoid this by extracting `Result<`[`Tx`]`, `[`Error`]`>` and handling the error:
+/// configuration and database errors to clients, but you can override the type of error that
+/// `Tx::from_request` returns using the `E` generic parameter:
 ///
 /// ```
+/// use axum::response::IntoResponse;
 /// use axum_sqlx_tx::Tx;
 /// use sqlx::Sqlite;
 ///
-/// // Hypothetical application error type implementing IntoResponse
-/// enum AppError {
-///     Db(axum_sqlx_tx::Error),
+/// struct MyError(axum_sqlx_tx::Error);
+///
+/// // The error type must implement From<axum_sqlx_tx::Error>
+/// impl From<axum_sqlx_tx::Error> for MyError {
+///     fn from(error: axum_sqlx_tx::Error) -> Self {
+///         Self(error)
+///     }
 /// }
 ///
-/// async fn handler(tx: Result<Tx<Sqlite>, axum_sqlx_tx::Error>) -> Result<(), AppError> {
-///     let tx = tx.map_err(AppError::Db)?;
+/// // The error type must implement IntoResponse
+/// impl IntoResponse for MyError {
+///     fn into_response(self) -> axum::response::Response {
+///         (http::StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
+///     }
+/// }
+///
+/// async fn handler(tx: Tx<Sqlite, MyError>) {
 ///     /* ... */
-/// # Ok(())
 /// }
 /// ```
 #[derive(Debug, thiserror::Error)]

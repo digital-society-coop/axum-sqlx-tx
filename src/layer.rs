@@ -34,6 +34,9 @@ impl<DB: sqlx::Database> Layer<DB> {
     /// If you want to access the pool outside of a transaction, you should add it also with
     /// [`axum::Extension`].
     ///
+    /// To use a different type than [`Error`] to convert commit errors into responses, see
+    /// [`new_with_error`](Self::new_with_error).
+    ///
     /// [`axum::Extension`]: https://docs.rs/axum/latest/axum/extract/struct.Extension.html
     pub fn new(pool: sqlx::Pool<DB>) -> Self {
         Self::new_with_error(pool)

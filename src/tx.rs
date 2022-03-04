@@ -42,6 +42,35 @@ use crate::{
 /// #   Ok(())
 /// }
 /// ```
+///
+/// The `E` generic parameter controls the error type returned when the extractor fails. This can be
+/// used to configure the error response returned when the extractor fails:
+///
+/// ```
+/// use axum::response::IntoResponse;
+/// use axum_sqlx_tx::Tx;
+/// use sqlx::Sqlite;
+///
+/// struct MyError(axum_sqlx_tx::Error);
+///
+/// // The error type must implement From<axum_sqlx_tx::Error>
+/// impl From<axum_sqlx_tx::Error> for MyError {
+///     fn from(error: axum_sqlx_tx::Error) -> Self {
+///         Self(error)
+///     }
+/// }
+///
+/// // The error type must implement IntoResponse
+/// impl IntoResponse for MyError {
+///     fn into_response(self) -> axum::response::Response {
+///         (http::StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
+///     }
+/// }
+///
+/// async fn handler(tx: Tx<Sqlite, MyError>) {
+///     /* ... */
+/// }
+/// ```
 #[derive(Debug)]
 pub struct Tx<DB: sqlx::Database, E = Error>(Lease<sqlx::Transaction<'static, DB>>, PhantomData<E>);
 
