@@ -1,4 +1,4 @@
-use axum::{error_handling::HandleErrorLayer, response::IntoResponse};
+use axum::response::IntoResponse;
 use sqlx::{sqlite::SqliteArguments, Arguments as _};
 use tempfile::NamedTempFile;
 use tower::ServiceExt;
@@ -149,13 +149,7 @@ where
 
     let app = axum::Router::new()
         .route("/", axum::routing::get(handler))
-        .layer(
-            tower::ServiceBuilder::new()
-                .layer(HandleErrorLayer::new(|error: sqlx::Error| async move {
-                    error.to_string()
-                }))
-                .layer(axum_sqlx_tx::Layer::new(pool.clone())),
-        );
+        .layer(axum_sqlx_tx::Layer::new(pool.clone()));
 
     let response = app
         .oneshot(

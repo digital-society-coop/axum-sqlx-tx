@@ -1,8 +1,11 @@
 //! A [`tower_layer::Layer`] that enables the [`Tx`](crate::Tx) extractor.
 
+use axum_core::response::IntoResponse;
+use bytes::Bytes;
 use futures_core::future::BoxFuture;
+use http_body::{combinators::UnsyncBoxBody, Body};
 
-use crate::tx::TxSlot;
+use crate::{tx::TxSlot, Error};
 
 /// A [`tower_layer::Layer`] that enables the [`Tx`] extractor.
 ///
@@ -72,10 +75,11 @@ where
         Error = std::convert::Infallible,
     >,
     S::Future: Send + 'static,
-    ResBody: Send,
+    ResBody: Body<Data = Bytes> + Send + 'static,
+    ResBody::Error: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
 {
-    type Response = S::Response;
-    type Error = sqlx::Error;
+    type Response = http::Response<UnsyncBoxBody<ResBody::Data, axum_core::Error>>;
+    type Error = S::Error;
     type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
     fn poll_ready(
@@ -94,19 +98,18 @@ where
             let res = res.await.unwrap(); // inner service is infallible
 
             if res.status().is_success() {
-                transaction.commit().await?;
+                if let Err(error) = transaction.commit().await {
+                    return Ok(Error::Database { error }.into_response());
+                }
             }
 
-            Ok(res)
+            Ok(res.map(|body| body.map_err(axum_core::Error::new).boxed_unsync()))
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use axum::error_handling::HandleErrorLayer;
-    use tower::ServiceBuilder;
-
     use super::Layer;
 
     // The trait shenanigans required by axum for layers are significant, so this "test" ensures
@@ -117,11 +120,7 @@ mod tests {
 
         let app = axum::Router::new()
             .route("/", axum::routing::get(|| async { "hello" }))
-            .layer(
-                ServiceBuilder::new()
-                    .layer(HandleErrorLayer::new(|_: sqlx::Error| async {}))
-                    .layer(Layer::new(pool)),
-            );
+            .layer(Layer::new(pool));
 
         axum::Server::bind(todo!()).serve(app.into_make_service());
     }

@@ -2,7 +2,7 @@
 
 use std::error::Error;
 
-use axum::{error_handling::HandleErrorLayer, response::IntoResponse, routing::get, Json};
+use axum::{response::IntoResponse, routing::get, Json};
 use http::StatusCode;
 
 // OPTIONAL: use a type alias to avoid repeating your database type
@@ -22,16 +22,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Standard axum app setup
     let app = axum::Router::new()
         .route("/numbers", get(list_numbers).post(generate_number))
-        .layer(
-            // Apply the Tx middleware
-            tower::ServiceBuilder::new()
-                .layer(HandleErrorLayer::new(|error: sqlx::Error| async move {
-                    // The transaction is committed by the middleware so an error is possible
-                    // and must be converted into a response.
-                    DbError(error)
-                }))
-                .layer(axum_sqlx_tx::Layer::new(pool.clone())),
-        );
+        // Apply the Tx middleware
+        .layer(axum_sqlx_tx::Layer::new(pool.clone()));
 
     let server = axum::Server::bind(&([0, 0, 0, 0], 0).into()).serve(app.into_make_service());
 

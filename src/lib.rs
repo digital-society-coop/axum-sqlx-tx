@@ -20,22 +20,12 @@
 //! To use the [`Tx`] extractor, you must first add [`Layer`] to your app:
 //!
 //! ```no_run
-//! # use axum::error_handling::HandleErrorLayer;
 //! # async fn foo() {
 //! let pool = /* any sqlx::Pool */
 //! # sqlx::SqlitePool::connect(todo!()).await.unwrap();
 //! let app = axum::Router::new()
 //!     // .route(...)s
-//!     .layer(
-//!         tower::ServiceBuilder::new()
-//!             // The transaction is committed by the middleware so an error is possible and must
-//!             // be converted into a response
-//!             .layer(HandleErrorLayer::new(|error: sqlx::Error| async move {
-//!                 http::StatusCode::INTERNAL_SERVER_ERROR
-//!             }))
-//!             // Now we can add the middleware
-//!             .layer(axum_sqlx_tx::Layer::new(pool)),
-//!     );
+//!     .layer(axum_sqlx_tx::Layer::new(pool));
 //! # axum::Server::bind(todo!()).serve(app.into_make_service());
 //! # }
 //! ```
