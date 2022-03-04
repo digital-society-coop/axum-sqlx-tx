@@ -6,20 +6,6 @@ on:
       - master
 
 jobs:
-  fmt:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          profile: default
-          override: true
-      - uses: actions-rs/cargo@v1
-        with:
-          command: fmt
-          args: -- --check
-          
   clippy:
     strategy:
       fail-fast: false
@@ -41,12 +27,39 @@ jobs:
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
-          profile: default
           override: true
+          components: clippy
       - uses: actions-rs/cargo@v1
         with:
           command: clippy
           args: --features '${{ matrix.db }} ${{ matrix.db_any }} ${{ matrix.runtime }}' -- -D warnings
+
+  doc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - uses: actions-rs/cargo@v1
+        with:
+          command: doc
+          args: --features runtime-tokio-rustls,all-databases
+
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          components: rustfmt
+      - uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: -- --check
           
   test:
     runs-on: ubuntu-latest
