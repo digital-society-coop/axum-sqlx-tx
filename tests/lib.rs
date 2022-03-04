@@ -1,9 +1,9 @@
-use axum::error_handling::HandleErrorLayer;
+use axum::response::IntoResponse;
 use sqlx::{sqlite::SqliteArguments, Arguments as _};
 use tempfile::NamedTempFile;
 use tower::ServiceExt;
 
-type Tx = axum_sqlx_tx::Tx<sqlx::Sqlite>;
+type Tx<E = axum_sqlx_tx::Error> = axum_sqlx_tx::Tx<sqlx::Sqlite, E>;
 
 #[tokio::test]
 async fn commit_on_success() {
@@ -85,6 +85,65 @@ async fn overlapping_extractors() {
     );
 }
 
+#[tokio::test]
+async fn extractor_error_override() {
+    let (_, _, response) = build_app(|_: Tx, _: Tx<MyError>| async move {}).await;
+
+    assert!(response.status.is_client_error());
+    assert_eq!(response.body, "internal server error");
+}
+
+#[tokio::test]
+async fn layer_error_override() {
+    let db = NamedTempFile::new().unwrap();
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", db.path().display()))
+        .await
+        .unwrap();
+
+    sqlx::query("CREATE TABLE IF NOT EXISTS users (id INT PRIMARY KEY);")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS comments (
+            id INT PRIMARY KEY,
+            user_id INT,
+            FOREIGN KEY (user_id) REFERENCES users(id) DEFERRABLE INITIALLY DEFERRED
+        );"#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let app = axum::Router::new()
+        .route(
+            "/",
+            axum::routing::get(|mut tx: Tx| async move {
+                sqlx::query("INSERT INTO comments VALUES (random(), random())")
+                    .execute(&mut tx)
+                    .await
+                    .unwrap();
+            }),
+        )
+        .layer(axum_sqlx_tx::Layer::new_with_error::<MyError>(pool.clone()));
+
+    let response = app
+        .oneshot(
+            http::Request::builder()
+                .uri("/")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+
+    assert!(status.is_client_error());
+    assert_eq!(body, "internal server error");
+}
+
 async fn insert_user(tx: &mut Tx, id: i32, name: &str) -> (i32, String) {
     let mut args = SqliteArguments::default();
     args.add(id);
@@ -127,13 +186,7 @@ where
 
     let app = axum::Router::new()
         .route("/", axum::routing::get(handler))
-        .layer(
-            tower::ServiceBuilder::new()
-                .layer(HandleErrorLayer::new(|error: sqlx::Error| async move {
-                    error.to_string()
-                }))
-                .layer(axum_sqlx_tx::Layer::new(pool.clone())),
-        );
+        .layer(axum_sqlx_tx::Layer::new(pool.clone()));
 
     let response = app
         .oneshot(
@@ -148,4 +201,18 @@ where
     let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
 
     (db, pool, Response { status, body })
+}
+
+struct MyError(axum_sqlx_tx::Error);
+
+impl From<axum_sqlx_tx::Error> for MyError {
+    fn from(error: axum_sqlx_tx::Error) -> Self {
+        Self(error)
+    }
+}
+
+impl IntoResponse for MyError {
+    fn into_response(self) -> axum::response::Response {
+        (http::StatusCode::IM_A_TEAPOT, "internal server error").into_response()
+    }
 }

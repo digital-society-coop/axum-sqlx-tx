@@ -1,12 +1,17 @@
 //! A request extension that enables the [`Tx`](crate::Tx) extractor.
 
+use std::marker::PhantomData;
+
 use axum_core::{
     extract::{FromRequest, RequestParts},
-    response::{IntoResponse, Response},
+    response::IntoResponse,
 };
 use sqlx::Transaction;
 
-use crate::slot::{Lease, Slot};
+use crate::{
+    slot::{Lease, Slot},
+    Error,
+};
 
 /// An `axum` extractor for a database transaction.
 ///
@@ -37,10 +42,39 @@ use crate::slot::{Lease, Slot};
 /// #   Ok(())
 /// }
 /// ```
+///
+/// The `E` generic parameter controls the error type returned when the extractor fails. This can be
+/// used to configure the error response returned when the extractor fails:
+///
+/// ```
+/// use axum::response::IntoResponse;
+/// use axum_sqlx_tx::Tx;
+/// use sqlx::Sqlite;
+///
+/// struct MyError(axum_sqlx_tx::Error);
+///
+/// // The error type must implement From<axum_sqlx_tx::Error>
+/// impl From<axum_sqlx_tx::Error> for MyError {
+///     fn from(error: axum_sqlx_tx::Error) -> Self {
+///         Self(error)
+///     }
+/// }
+///
+/// // The error type must implement IntoResponse
+/// impl IntoResponse for MyError {
+///     fn into_response(self) -> axum::response::Response {
+///         (http::StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
+///     }
+/// }
+///
+/// async fn handler(tx: Tx<Sqlite, MyError>) {
+///     /* ... */
+/// }
+/// ```
 #[derive(Debug)]
-pub struct Tx<DB: sqlx::Database>(Lease<sqlx::Transaction<'static, DB>>);
+pub struct Tx<DB: sqlx::Database, E = Error>(Lease<sqlx::Transaction<'static, DB>>, PhantomData<E>);
 
-impl<DB: sqlx::Database> Tx<DB> {
+impl<DB: sqlx::Database, E> Tx<DB, E> {
     /// Explicitly commit the transaction.
     ///
     /// By default, the transaction will be committed when a successful response is returned
@@ -54,19 +88,19 @@ impl<DB: sqlx::Database> Tx<DB> {
     }
 }
 
-impl<DB: sqlx::Database> AsRef<sqlx::Transaction<'static, DB>> for Tx<DB> {
+impl<DB: sqlx::Database, E> AsRef<sqlx::Transaction<'static, DB>> for Tx<DB, E> {
     fn as_ref(&self) -> &sqlx::Transaction<'static, DB> {
         &self.0
     }
 }
 
-impl<DB: sqlx::Database> AsMut<sqlx::Transaction<'static, DB>> for Tx<DB> {
+impl<DB: sqlx::Database, E> AsMut<sqlx::Transaction<'static, DB>> for Tx<DB, E> {
     fn as_mut(&mut self) -> &mut sqlx::Transaction<'static, DB> {
         &mut self.0
     }
 }
 
-impl<DB: sqlx::Database> std::ops::Deref for Tx<DB> {
+impl<DB: sqlx::Database, E> std::ops::Deref for Tx<DB, E> {
     type Target = sqlx::Transaction<'static, DB>;
 
     fn deref(&self) -> &Self::Target {
@@ -74,14 +108,18 @@ impl<DB: sqlx::Database> std::ops::Deref for Tx<DB> {
     }
 }
 
-impl<DB: sqlx::Database> std::ops::DerefMut for Tx<DB> {
+impl<DB: sqlx::Database, E> std::ops::DerefMut for Tx<DB, E> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
-impl<DB: sqlx::Database, B: Send> FromRequest<B> for Tx<DB> {
-    type Rejection = Error;
+impl<DB: sqlx::Database, B, E> FromRequest<B> for Tx<DB, E>
+where
+    B: Send,
+    E: From<Error> + IntoResponse,
+{
+    type Rejection = E;
 
     fn from_request<'req, 'ctx>(
         req: &'req mut RequestParts<B>,
@@ -98,56 +136,8 @@ impl<DB: sqlx::Database, B: Send> FromRequest<B> for Tx<DB> {
 
             let tx = ext.get_or_begin().await?;
 
-            Ok(Self(tx))
+            Ok(Self(tx, PhantomData))
         })
-    }
-}
-
-/// Possible errors when extracting [`Tx`] from a request.
-///
-/// `axum` requires that the [`FromRequest`] `Rejection` implements `IntoResponse`, which this does
-/// by returning the `Display` representation of the variant. Note that this means returning
-/// configuration and database errors to clients, but there's sadly not currently a better default
-/// (open to feedback on this).
-///
-/// You could avoid this by extracting `Result<`[`Tx`]`, `[`Error`]`>` and handling the error:
-///
-/// ```
-/// use axum_sqlx_tx::Tx;
-/// use sqlx::Sqlite;
-///
-/// // Hypothetical application error type implementing IntoResponse
-/// enum AppError {
-///     Db(axum_sqlx_tx::Error),
-/// }
-///
-/// async fn handler(tx: Result<Tx<Sqlite>, axum_sqlx_tx::Error>) -> Result<(), AppError> {
-///     let tx = tx.map_err(AppError::Db)?;
-///     /* ... */
-/// # Ok(())
-/// }
-/// ```
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    /// Indicates that the [`Layer`](crate::Layer) middleware was not installed.
-    #[error("required extension not registered; did you add the axum_sqlx_tx::Layer middleware?")]
-    MissingExtension,
-
-    /// Indicates that [`Tx`] was extracted multiple times in a single handler/middleware.
-    #[error("axum_sqlx_tx::Tx extractor used multiple times in the same handler/middleware")]
-    OverlappingExtractors,
-
-    /// A database error occurred when starting the transaction.
-    #[error(transparent)]
-    Database {
-        #[from]
-        error: sqlx::Error,
-    },
-}
-
-impl IntoResponse for Error {
-    fn into_response(self) -> Response {
-        (http::StatusCode::INTERNAL_SERVER_ERROR, self.to_string()).into_response()
     }
 }
 
@@ -203,17 +193,19 @@ impl<DB: sqlx::Database> Lazy<DB> {
     feature = "sqlite"
 ))]
 mod sqlx_impls {
+    use std::fmt::Debug;
+
     use futures_core::{future::BoxFuture, stream::BoxStream};
 
     macro_rules! impl_executor {
         ($db:path) => {
-            impl<'c> sqlx::Executor<'c> for &'c mut super::Tx<$db> {
+            impl<'c, E: Debug + Send> sqlx::Executor<'c> for &'c mut super::Tx<$db, E> {
                 type Database = $db;
 
                 #[allow(clippy::type_complexity)]
-                fn fetch_many<'e, 'q: 'e, E: 'q>(
+                fn fetch_many<'e, 'q: 'e, Q: 'q>(
                     self,
-                    query: E,
+                    query: Q,
                 ) -> BoxStream<
                     'e,
                     Result<
@@ -226,21 +218,21 @@ mod sqlx_impls {
                 >
                 where
                     'c: 'e,
-                    E: sqlx::Execute<'q, Self::Database>,
+                    Q: sqlx::Execute<'q, Self::Database>,
                 {
                     (&mut **self).fetch_many(query)
                 }
 
-                fn fetch_optional<'e, 'q: 'e, E: 'q>(
+                fn fetch_optional<'e, 'q: 'e, Q: 'q>(
                     self,
-                    query: E,
+                    query: Q,
                 ) -> BoxFuture<
                     'e,
                     Result<Option<<Self::Database as sqlx::Database>::Row>, sqlx::Error>,
                 >
                 where
                     'c: 'e,
-                    E: sqlx::Execute<'q, Self::Database>,
+                    Q: sqlx::Execute<'q, Self::Database>,
                 {
                     (&mut **self).fetch_optional(query)
                 }
