@@ -69,6 +69,8 @@
 //!
 //! [examples]: https://github.com/wasdacraic/axum-sqlx-tx/tree/master/examples
 
+#![cfg_attr(doc, deny(warnings))]
+
 mod layer;
 mod slot;
 mod tx;
