@@ -4,26 +4,26 @@
 //! Conceptually, the `Slot<T>` is the "primary" owner of the value, and access can be leased to one
 //! other owner through an associated `Lease<T>`.
 //!
-//! It's implemented as a wrapper around a `futures::channel::oneshot` channel, where the `Slot`
-//! wraps the `Receiver` and the `Lease` the `Sender` and the value. All methods are non-blocking.
+//! It's implemented as a wrapper around an `Arc<Mutex<Option_>>>`, where the `Slot` `take`s the
+//! value from the `Option` on lease, and the `Lease` puts it back in on drop.
+//!
+//! Note that while this is **safe** to use across threads (it is `Send` + `Sync`), concurrently
+//! `lease`ing and dropping `Lease`s is not supported. It's intended for use in synchronous
+//! scenarios that the compiler thinks may be concurrent, like middleware stacks!
 
-use futures::channel::oneshot;
+use parking_lot::Mutex;
+use std::sync::{Arc, Weak};
 
 /// A slot that may contain a value that can be leased.
 ///
 /// The slot itself is opaque, the only way to see the value (if any) is with `lease` or
 /// `into_inner`.
-pub(crate) struct Slot<T>(oneshot::Receiver<T>);
+pub(crate) struct Slot<T>(Arc<Mutex<Option<T>>>);
 
 impl<T> Slot<T> {
     /// Construct a new `Slot` holding the given value.
     pub(crate) fn new(value: T) -> Self {
-        let (tx, rx) = oneshot::channel();
-
-        // ignore the possible error, which can't happen since we know the channel is empty
-        tx.send(value).ok().expect("BUG: new channel not empty");
-
-        Self(rx)
+        Self(Arc::new(Mutex::new(Some(value))))
     }
 
     /// Construct a new `Slot` and an immediately acquired `Lease`.
@@ -41,10 +41,8 @@ impl<T> Slot<T> {
     /// to the slot when the `Lease` is dropped, or the value may be "stolen", leaving the slot
     /// permanently empty.
     pub(crate) fn lease(&mut self) -> Option<Lease<T>> {
-        if let Ok(Some(value)) = self.0.try_recv() {
-            let (tx, rx) = oneshot::channel();
-            self.0 = rx;
-            Some(Lease::new(value, tx))
+        if let Some(value) = self.0.try_lock().and_then(|mut slot| slot.take()) {
+            Some(Lease::new(value, Arc::downgrade(&self.0)))
         } else {
             None
         }
@@ -55,8 +53,8 @@ impl<T> Slot<T> {
     /// Note that if this returns `Some`, there are no oustanding leases. If it returns `None` then
     /// the value has been leased, and since this consumes the slot the value will be dropped once
     /// the lease is done.
-    pub(crate) fn into_inner(mut self) -> Option<T> {
-        self.0.try_recv().ok().flatten()
+    pub(crate) fn into_inner(self) -> Option<T> {
+        self.0.try_lock().and_then(|mut slot| slot.take())
     }
 }
 
@@ -65,7 +63,7 @@ impl<T> Slot<T> {
 pub(crate) struct Lease<T>(lease::State<T>);
 
 impl<T> Lease<T> {
-    fn new(value: T, slot: oneshot::Sender<T>) -> Self {
+    fn new(value: T, slot: Weak<Mutex<Option<T>>>) -> Self {
         Self(lease::State::new(value, slot))
     }
 
@@ -108,7 +106,9 @@ impl<T> std::ops::DerefMut for Lease<T> {
 }
 
 mod lease {
-    use futures::channel::oneshot;
+    use std::sync::Weak;
+
+    use parking_lot::Mutex;
 
     #[derive(Debug)]
     pub(super) struct State<T>(Inner<T>);
@@ -117,11 +117,14 @@ mod lease {
     enum Inner<T> {
         Dropped,
         Stolen,
-        Live { value: T, slot: oneshot::Sender<T> },
+        Live {
+            value: T,
+            slot: Weak<Mutex<Option<T>>>,
+        },
     }
 
     impl<T> State<T> {
-        pub(super) fn new(value: T, slot: oneshot::Sender<T>) -> Self {
+        pub(super) fn new(value: T, slot: Weak<Mutex<Option<T>>>) -> Self {
             Self(Inner::Live { value, slot })
         }
 
@@ -144,8 +147,13 @@ mod lease {
                 Inner::Dropped => panic!("BUG: LeaseState::drop called twice"),
                 Inner::Stolen => {} // nothing to do if the value was stolen
                 Inner::Live { value, slot } => {
-                    // try to return value to the slot, if it fails (slot has gone) just drop value
-                    let _ = slot.send(value);
+                    // try to return value to the slot, if it fails just drop value
+                    if let Some(slot) = slot.upgrade() {
+                        if let Some(mut slot) = slot.try_lock() {
+                            assert!(slot.is_none(), "BUG: slot repopulated during lease");
+                            *slot = Some(value);
+                        }
+                    }
                 }
             }
         }

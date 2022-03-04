@@ -1,6 +1,6 @@
 //! A [`tower_layer::Layer`] that enables the [`Tx`](crate::Tx) extractor.
 
-use futures::future::BoxFuture;
+use futures_core::future::BoxFuture;
 
 use crate::tx::TxSlot;
 

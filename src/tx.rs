@@ -57,7 +57,7 @@ impl<DB: sqlx::Database, B: Send> FromRequest<B> for Tx<DB> {
 
     fn from_request<'req, 'ctx>(
         req: &'req mut RequestParts<B>,
-    ) -> futures::future::BoxFuture<'ctx, Result<Self, Self::Rejection>>
+    ) -> futures_core::future::BoxFuture<'ctx, Result<Self, Self::Rejection>>
     where
         'req: 'ctx,
         Self: 'ctx,
@@ -150,7 +150,7 @@ impl<DB: sqlx::Database> Lazy<DB> {
     feature = "sqlite"
 ))]
 mod sqlx_impls {
-    use futures::{future::BoxFuture, stream::BoxStream};
+    use futures_core::{future::BoxFuture, stream::BoxStream};
 
     macro_rules! impl_executor {
         ($db:path) => {

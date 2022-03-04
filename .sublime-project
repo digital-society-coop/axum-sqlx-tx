@@ -1,0 +1,17 @@
+{
+  "folders": [
+    {
+      "path": "."
+    }
+  ],
+  "settings": {
+    "LSP": {
+      "rust-analyzer": {
+        "settings": {
+          "rust-analyzer.cargo.allFeatures": false,
+          "rust-analyzer.cargo.features": ["all-databases", "runtime-tokio-rustls"]
+        }
+      }
+    }
+  }
+}
