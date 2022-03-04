@@ -5,6 +5,12 @@ version = "0.1.1"
 license = "MIT"
 repository = "https://github.com/wasdacraic/axum-sqlx-tx/"
 edition = "2021"
+include = [
+  "LICENSE",
+  "README.md",
+  "Cargo.toml",
+  "**/*.rs"
+]
 
 [features]
 all-databases = ["any", "mssql", "mysql", "postgres", "sqlite"]
