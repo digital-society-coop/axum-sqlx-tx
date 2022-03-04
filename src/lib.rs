@@ -77,5 +77,53 @@ mod tx;
 
 pub use crate::{
     layer::{Layer, Service},
-    tx::{Error, Tx},
+    tx::Tx,
 };
+
+/// Possible errors when extracting [`Tx`] from a request.
+///
+/// `axum` requires that the [`FromRequest`] `Rejection` implements `IntoResponse`, which this does
+/// by returning the `Display` representation of the variant. Note that this means returning
+/// configuration and database errors to clients, but there's sadly not currently a better default
+/// (open to feedback on this).
+///
+/// You could avoid this by extracting `Result<`[`Tx`]`, `[`Error`]`>` and handling the error:
+///
+/// ```
+/// use axum_sqlx_tx::Tx;
+/// use sqlx::Sqlite;
+///
+/// // Hypothetical application error type implementing IntoResponse
+/// enum AppError {
+///     Db(axum_sqlx_tx::Error),
+/// }
+///
+/// async fn handler(tx: Result<Tx<Sqlite>, axum_sqlx_tx::Error>) -> Result<(), AppError> {
+///     let tx = tx.map_err(AppError::Db)?;
+///     /* ... */
+/// # Ok(())
+/// }
+/// ```
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// Indicates that the [`Layer`](crate::Layer) middleware was not installed.
+    #[error("required extension not registered; did you add the axum_sqlx_tx::Layer middleware?")]
+    MissingExtension,
+
+    /// Indicates that [`Tx`] was extracted multiple times in a single handler/middleware.
+    #[error("axum_sqlx_tx::Tx extractor used multiple times in the same handler/middleware")]
+    OverlappingExtractors,
+
+    /// A database error occurred when starting the transaction.
+    #[error(transparent)]
+    Database {
+        #[from]
+        error: sqlx::Error,
+    },
+}
+
+impl axum_core::response::IntoResponse for Error {
+    fn into_response(self) -> axum_core::response::Response {
+        (http::StatusCode::INTERNAL_SERVER_ERROR, self.to_string()).into_response()
+    }
+}
