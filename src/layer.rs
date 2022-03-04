@@ -1,5 +1,7 @@
 //! A [`tower_layer::Layer`] that enables the [`Tx`](crate::Tx) extractor.
 
+use std::marker::PhantomData;
+
 use axum_core::response::IntoResponse;
 use bytes::Bytes;
 use futures_core::future::BoxFuture;
@@ -18,8 +20,9 @@ use crate::{tx::TxSlot, Error};
 ///
 /// [`Tx`]: crate::Tx
 /// [request extensions]: https://docs.rs/http/latest/http/struct.Extensions.html
-pub struct Layer<DB: sqlx::Database> {
+pub struct Layer<DB: sqlx::Database, E = Error> {
     pool: sqlx::Pool<DB>,
+    _error: PhantomData<E>,
 }
 
 impl<DB: sqlx::Database> Layer<DB> {
@@ -33,17 +36,28 @@ impl<DB: sqlx::Database> Layer<DB> {
     ///
     /// [`axum::Extension`]: https://docs.rs/axum/latest/axum/extract/struct.Extension.html
     pub fn new(pool: sqlx::Pool<DB>) -> Self {
-        Self { pool }
+        Self::new_with_error(pool)
+    }
+
+    /// Construct a new layer with a specific error type.
+    ///
+    /// See [`Layer::new`] for more information.
+    pub fn new_with_error<E>(pool: sqlx::Pool<DB>) -> Layer<DB, E> {
+        Layer {
+            pool,
+            _error: PhantomData,
+        }
     }
 }
 
-impl<DB: sqlx::Database, S> tower_layer::Layer<S> for Layer<DB> {
-    type Service = Service<DB, S>;
+impl<DB: sqlx::Database, S, E> tower_layer::Layer<S> for Layer<DB, E> {
+    type Service = Service<DB, S, E>;
 
     fn layer(&self, inner: S) -> Self::Service {
         Service {
             pool: self.pool.clone(),
             inner,
+            _error: self._error,
         }
     }
 }
@@ -51,23 +65,25 @@ impl<DB: sqlx::Database, S> tower_layer::Layer<S> for Layer<DB> {
 /// A [`tower_service::Service`] that enables the [`Tx`](crate::Tx) extractor.
 ///
 /// See [`Layer`] for more information.
-pub struct Service<DB: sqlx::Database, S> {
+pub struct Service<DB: sqlx::Database, S, E = Error> {
     pool: sqlx::Pool<DB>,
     inner: S,
+    _error: PhantomData<E>,
 }
 
 // can't simply derive because `DB` isn't `Clone`
-impl<DB: sqlx::Database, S: Clone> Clone for Service<DB, S> {
+impl<DB: sqlx::Database, S: Clone, E> Clone for Service<DB, S, E> {
     fn clone(&self) -> Self {
         Self {
             pool: self.pool.clone(),
             inner: self.inner.clone(),
+            _error: self._error,
         }
     }
 }
 
-impl<DB: sqlx::Database, S, ReqBody, ResBody> tower_service::Service<http::Request<ReqBody>>
-    for Service<DB, S>
+impl<DB: sqlx::Database, S, E, ReqBody, ResBody> tower_service::Service<http::Request<ReqBody>>
+    for Service<DB, S, E>
 where
     S: tower_service::Service<
         http::Request<ReqBody>,
@@ -75,6 +91,7 @@ where
         Error = std::convert::Infallible,
     >,
     S::Future: Send + 'static,
+    E: From<Error> + IntoResponse,
     ResBody: Body<Data = Bytes> + Send + 'static,
     ResBody::Error: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
 {
@@ -99,7 +116,7 @@ where
 
             if res.status().is_success() {
                 if let Err(error) = transaction.commit().await {
-                    return Ok(Error::Database { error }.into_response());
+                    return Ok(E::from(Error::Database { error }).into_response());
                 }
             }
 
