@@ -1,5 +1,7 @@
 //! A request extension that enables the [`Tx`](crate::Tx) extractor.
 
+use std::marker::PhantomData;
+
 use axum_core::{
     extract::{FromRequest, RequestParts},
     response::{IntoResponse, Response},
@@ -38,9 +40,9 @@ use crate::slot::{Lease, Slot};
 /// }
 /// ```
 #[derive(Debug)]
-pub struct Tx<DB: sqlx::Database>(Lease<sqlx::Transaction<'static, DB>>);
+pub struct Tx<DB: sqlx::Database, E = Error>(Lease<sqlx::Transaction<'static, DB>>, PhantomData<E>);
 
-impl<DB: sqlx::Database> Tx<DB> {
+impl<DB: sqlx::Database, E> Tx<DB, E> {
     /// Explicitly commit the transaction.
     ///
     /// By default, the transaction will be committed when a successful response is returned
@@ -54,19 +56,19 @@ impl<DB: sqlx::Database> Tx<DB> {
     }
 }
 
-impl<DB: sqlx::Database> AsRef<sqlx::Transaction<'static, DB>> for Tx<DB> {
+impl<DB: sqlx::Database, E> AsRef<sqlx::Transaction<'static, DB>> for Tx<DB, E> {
     fn as_ref(&self) -> &sqlx::Transaction<'static, DB> {
         &self.0
     }
 }
 
-impl<DB: sqlx::Database> AsMut<sqlx::Transaction<'static, DB>> for Tx<DB> {
+impl<DB: sqlx::Database, E> AsMut<sqlx::Transaction<'static, DB>> for Tx<DB, E> {
     fn as_mut(&mut self) -> &mut sqlx::Transaction<'static, DB> {
         &mut self.0
     }
 }
 
-impl<DB: sqlx::Database> std::ops::Deref for Tx<DB> {
+impl<DB: sqlx::Database, E> std::ops::Deref for Tx<DB, E> {
     type Target = sqlx::Transaction<'static, DB>;
 
     fn deref(&self) -> &Self::Target {
@@ -74,14 +76,18 @@ impl<DB: sqlx::Database> std::ops::Deref for Tx<DB> {
     }
 }
 
-impl<DB: sqlx::Database> std::ops::DerefMut for Tx<DB> {
+impl<DB: sqlx::Database, E> std::ops::DerefMut for Tx<DB, E> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
-impl<DB: sqlx::Database, B: Send> FromRequest<B> for Tx<DB> {
-    type Rejection = Error;
+impl<DB: sqlx::Database, B, E> FromRequest<B> for Tx<DB, E>
+where
+    B: Send,
+    E: From<Error> + IntoResponse,
+{
+    type Rejection = E;
 
     fn from_request<'req, 'ctx>(
         req: &'req mut RequestParts<B>,
@@ -98,7 +104,7 @@ impl<DB: sqlx::Database, B: Send> FromRequest<B> for Tx<DB> {
 
             let tx = ext.get_or_begin().await?;
 
-            Ok(Self(tx))
+            Ok(Self(tx, PhantomData))
         })
     }
 }
@@ -203,17 +209,19 @@ impl<DB: sqlx::Database> Lazy<DB> {
     feature = "sqlite"
 ))]
 mod sqlx_impls {
+    use std::fmt::Debug;
+
     use futures_core::{future::BoxFuture, stream::BoxStream};
 
     macro_rules! impl_executor {
         ($db:path) => {
-            impl<'c> sqlx::Executor<'c> for &'c mut super::Tx<$db> {
+            impl<'c, E: Debug + Send> sqlx::Executor<'c> for &'c mut super::Tx<$db, E> {
                 type Database = $db;
 
                 #[allow(clippy::type_complexity)]
-                fn fetch_many<'e, 'q: 'e, E: 'q>(
+                fn fetch_many<'e, 'q: 'e, Q: 'q>(
                     self,
-                    query: E,
+                    query: Q,
                 ) -> BoxStream<
                     'e,
                     Result<
@@ -226,21 +234,21 @@ mod sqlx_impls {
                 >
                 where
                     'c: 'e,
-                    E: sqlx::Execute<'q, Self::Database>,
+                    Q: sqlx::Execute<'q, Self::Database>,
                 {
                     (&mut **self).fetch_many(query)
                 }
 
-                fn fetch_optional<'e, 'q: 'e, E: 'q>(
+                fn fetch_optional<'e, 'q: 'e, Q: 'q>(
                     self,
-                    query: E,
+                    query: Q,
                 ) -> BoxFuture<
                     'e,
                     Result<Option<<Self::Database as sqlx::Database>::Row>, sqlx::Error>,
                 >
                 where
                     'c: 'e,
-                    E: sqlx::Execute<'q, Self::Database>,
+                    Q: sqlx::Execute<'q, Self::Database>,
                 {
                     (&mut **self).fetch_optional(query)
                 }

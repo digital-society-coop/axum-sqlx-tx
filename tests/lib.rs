@@ -1,9 +1,9 @@
-use axum::error_handling::HandleErrorLayer;
+use axum::{error_handling::HandleErrorLayer, response::IntoResponse};
 use sqlx::{sqlite::SqliteArguments, Arguments as _};
 use tempfile::NamedTempFile;
 use tower::ServiceExt;
 
-type Tx = axum_sqlx_tx::Tx<sqlx::Sqlite>;
+type Tx<E = axum_sqlx_tx::Error> = axum_sqlx_tx::Tx<sqlx::Sqlite, E>;
 
 #[tokio::test]
 async fn commit_on_success() {
@@ -83,6 +83,28 @@ async fn overlapping_extractors() {
         response.body,
         format!("{}", axum_sqlx_tx::Error::OverlappingExtractors)
     );
+}
+
+#[tokio::test]
+async fn error_override() {
+    struct MyError(axum_sqlx_tx::Error);
+
+    impl From<axum_sqlx_tx::Error> for MyError {
+        fn from(error: axum_sqlx_tx::Error) -> Self {
+            Self(error)
+        }
+    }
+
+    impl IntoResponse for MyError {
+        fn into_response(self) -> axum::response::Response {
+            (http::StatusCode::IM_A_TEAPOT, "internal server error").into_response()
+        }
+    }
+
+    let (_, _, response) = build_app(|_: Tx, _: Tx<MyError>| async move {}).await;
+
+    assert!(response.status.is_client_error());
+    assert_eq!(response.body, "internal server error");
 }
 
 async fn insert_user(tx: &mut Tx, id: i32, name: &str) -> (i32, String) {
