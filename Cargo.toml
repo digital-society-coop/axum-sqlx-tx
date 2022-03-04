@@ -1,8 +1,10 @@
 [package]
 name = "axum-sqlx-tx"
+description = "Request-scoped SQLx transactions for axum"
 version = "0.1.0"
-edition = "2021"
 license = "MIT"
+repository = "https://github.com/wasdacraic/axum-sqlx-tx/"
+edition = "2021"
 
 [features]
 all-databases = ["any", "mssql", "mysql", "postgres", "sqlite"]
