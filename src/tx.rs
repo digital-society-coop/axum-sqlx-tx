@@ -9,6 +9,34 @@ use sqlx::Transaction;
 use crate::slot::{Lease, Slot};
 
 /// An `axum` extractor for a database transaction.
+///
+/// `&mut Tx` implements [`sqlx::Executor`] so it can be used directly with [`sqlx::query()`]
+/// (and [`sqlx::query_as()`], the corresponding macros, etc.):
+///
+/// ```
+/// use axum_sqlx_tx::Tx;
+/// use sqlx::Sqlite;
+///
+/// async fn handler(mut tx: Tx<Sqlite>) -> Result<(), sqlx::Error> {
+///     sqlx::query("...").execute(&mut tx).await?;
+///     /* ... */
+/// #   Ok(())
+/// }
+/// ```
+///
+/// It also implements `Deref<Target = `[`sqlx::Transaction`]`>` and `DerefMut`, so you can call
+/// methods from `Transaction` and its traits:
+///
+/// ```
+/// use axum_sqlx_tx::Tx;
+/// use sqlx::{Acquire as _, Sqlite};
+///
+/// async fn handler(mut tx: Tx<Sqlite>) -> Result<(), sqlx::Error> {
+///     let inner = tx.begin().await?;
+///     /* ... */
+/// #   Ok(())
+/// }
+/// ```
 #[derive(Debug)]
 pub struct Tx<DB: sqlx::Database>(Lease<sqlx::Transaction<'static, DB>>);
 
@@ -20,7 +48,7 @@ impl<DB: sqlx::Database> Tx<DB> {
     /// response). This method allows the transaction to be committed explicitly.
     ///
     /// **Note:** trying to use the `Tx` extractor again after calling `commit` will currently
-    /// generate [`Error::OverlappingExtractor`] errors.
+    /// generate [`Error::OverlappingExtractors`] errors. This may change in future.
     pub async fn commit(self) -> Result<(), sqlx::Error> {
         self.0.steal().commit().await
     }
@@ -77,19 +105,44 @@ impl<DB: sqlx::Database, B: Send> FromRequest<B> for Tx<DB> {
 
 /// Possible errors when extracting [`Tx`] from a request.
 ///
-/// `axum` requires the [`FromRequest`] `Rejection` implements `IntoResponse`, which this does by
-/// returning the `Display` representation of the variant. Note that this means returning database
-/// errors to clients, which isn't great, but there's not an obvious alternative.
+/// `axum` requires that the [`FromRequest`] `Rejection` implements `IntoResponse`, which this does
+/// by returning the `Display` representation of the variant. Note that this means returning
+/// configuration and database errors to clients, but there's sadly not currently a better default
+/// (open to feedback on this).
+///
+/// You could avoid this by extracting `Result<`[`Tx`]`, `[`Error`]`>` and handling the error:
+///
+/// ```
+/// use axum_sqlx_tx::Tx;
+/// use sqlx::Sqlite;
+///
+/// // Hypothetical application error type implementing IntoResponse
+/// enum AppError {
+///     Db(axum_sqlx_tx::Error),
+/// }
+///
+/// async fn handler(tx: Result<Tx<Sqlite>, axum_sqlx_tx::Error>) -> Result<(), AppError> {
+///     let tx = tx.map_err(AppError::Db)?;
+///     /* ... */
+/// # Ok(())
+/// }
+/// ```
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// Indicates that the [`Layer`](crate::Layer) middleware was not installed.
     #[error("required extension not registered; did you add the axum_sqlx_tx::Layer middleware?")]
     MissingExtension,
 
+    /// Indicates that [`Tx`] was extracted multiple times in a single handler/middleware.
     #[error("axum_sqlx_tx::Tx extractor used multiple times in the same handler/middleware")]
     OverlappingExtractors,
 
+    /// A database error occurred when starting the transaction.
     #[error(transparent)]
-    Database(#[from] sqlx::Error),
+    Database {
+        #[from]
+        error: sqlx::Error,
+    },
 }
 
 impl IntoResponse for Error {

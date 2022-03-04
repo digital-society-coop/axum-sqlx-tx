@@ -4,10 +4,17 @@ use futures_core::future::BoxFuture;
 
 use crate::tx::TxSlot;
 
-/// A [`tower_layer::Layer`] that enables the [`Tx`](crate::Tx) extractor.
+/// A [`tower_layer::Layer`] that enables the [`Tx`] extractor.
 ///
-/// This adds a value to request extensions that the [`Tx`](crate::Tx) extractor
-/// depends on.
+/// This layer adds a lazily-initialised transaction to the [request extensions]. The first time the
+/// [`Tx`] extractor is used on a request, a connection is acquired from the configured
+/// [`sqlx::Pool`] and a transaction is started on it. The same transaction will be returned for
+/// subsequent uses of [`Tx`] on the same request. The inner service is then called as normal. Once
+/// the inner service responds, the transaction is committed or rolled back depending on the status
+/// code of the response.
+///
+/// [`Tx`]: crate::Tx
+/// [request extensions]: https://docs.rs/http/latest/http/struct.Extensions.html
 pub struct Layer<DB: sqlx::Database> {
     pool: sqlx::Pool<DB>,
 }
@@ -19,7 +26,9 @@ impl<DB: sqlx::Database> Layer<DB> {
     /// from a request.
     ///
     /// If you want to access the pool outside of a transaction, you should add it also with
-    /// `axum::AddExtensionLayer`.
+    /// [`axum::Extension`].
+    ///
+    /// [`axum::Extension`]: https://docs.rs/axum/latest/axum/extract/struct.Extension.html
     pub fn new(pool: sqlx::Pool<DB>) -> Self {
         Self { pool }
     }
@@ -38,7 +47,7 @@ impl<DB: sqlx::Database, S> tower_layer::Layer<S> for Layer<DB> {
 
 /// A [`tower_service::Service`] that enables the [`Tx`](crate::Tx) extractor.
 ///
-/// This is constructed by [`Layer`].
+/// See [`Layer`] for more information.
 pub struct Service<DB: sqlx::Database, S> {
     pool: sqlx::Pool<DB>,
     inner: S,
