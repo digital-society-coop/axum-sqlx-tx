@@ -21,6 +21,20 @@ jobs:
           args: -- --check
           
   clippy:
+    strategy:
+      fail-fast: false
+      matrix:
+        db: ['', all-databases, mssql, mysql, postgres, sqlite]
+        db_any: ['', any]
+        runtime: [runtime-tokio-native-tls, runtime-tokio-rustls]
+        exclude:
+          # no-db w/ any doesn't make sense (sqlx won't compile)
+          - db: ''
+            db_any: any
+          # all-databases w/ any is redundant (all-databases enables any)
+          - db: all-databases
+            db_any: any
+    name: clippy (${{ matrix.runtime }}, ${{ matrix.db || 'no-db' }} ${{ matrix.db_any && 'w/ any' || 'w/o any' }})
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
@@ -32,7 +46,7 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: clippy
-          args: --features runtime-tokio-rustls -- -D warnings
+          args: --features '${{ matrix.db }} ${{ matrix.db_any }} ${{ matrix.runtime }}' -- -D warnings
           
   test:
     runs-on: ubuntu-latest
