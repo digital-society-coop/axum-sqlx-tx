@@ -131,7 +131,7 @@ where
         Box::pin(async move {
             let ext: &mut Lazy<DB> = req
                 .extensions_mut()
-                .and_then(|ext| ext.get_mut())
+                .get_mut()
                 .ok_or(Error::MissingExtension)?;
 
             let tx = ext.get_or_begin().await?;
