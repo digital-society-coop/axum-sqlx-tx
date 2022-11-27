@@ -24,6 +24,23 @@ async fn commit_on_success() {
 }
 
 #[tokio::test]
+async fn commit_on_redirection() {
+    let (_db, pool, response) = build_app(|mut tx: Tx| async move {
+        let (_, _) = insert_user(&mut tx, 1, "john redirect").await;
+        http::StatusCode::SEE_OTHER
+    })
+    .await;
+
+    assert!(response.status.is_redirection());
+
+    let users: Vec<(i32, String)> = sqlx::query_as("SELECT * FROM users")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(users, vec![(1, "john redirect".to_string())]);
+}
+
+#[tokio::test]
 async fn rollback_on_error() {
     let (_db, pool, response) = build_app(|mut tx: Tx| async move {
         insert_user(&mut tx, 1, "michael oxmaul").await;

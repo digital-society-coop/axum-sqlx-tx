@@ -117,7 +117,7 @@ where
         Box::pin(async move {
             let res = res.await.unwrap(); // inner service is infallible
 
-            if res.status().is_success() {
+            if !res.status().is_server_error() && !res.status().is_client_error() {
                 if let Err(error) = transaction.commit().await {
                     return Ok(E::from(Error::Database { error }).into_response());
                 }
