@@ -1,16 +1,13 @@
 //! A request extension that enables the [`Tx`](crate::Tx) extractor.
 
-use std::marker::PhantomData;
-
-use axum_core::{
-    extract::{FromRequest, RequestParts},
-    response::IntoResponse,
-};
+use axum_core::extract::FromRequestParts;
+use futures_core::future::BoxFuture;
+use http::request::Parts;
 use sqlx::Transaction;
 
 use crate::{
     slot::{Lease, Slot},
-    Error,
+    TxRejection,
 };
 
 /// An `axum` extractor for a database transaction.
@@ -42,39 +39,10 @@ use crate::{
 /// #   Ok(())
 /// }
 /// ```
-///
-/// The `E` generic parameter controls the error type returned when the extractor fails. This can be
-/// used to configure the error response returned when the extractor fails:
-///
-/// ```
-/// use axum::response::IntoResponse;
-/// use axum_sqlx_tx::Tx;
-/// use sqlx::Sqlite;
-///
-/// struct MyError(axum_sqlx_tx::Error);
-///
-/// // The error type must implement From<axum_sqlx_tx::Error>
-/// impl From<axum_sqlx_tx::Error> for MyError {
-///     fn from(error: axum_sqlx_tx::Error) -> Self {
-///         Self(error)
-///     }
-/// }
-///
-/// // The error type must implement IntoResponse
-/// impl IntoResponse for MyError {
-///     fn into_response(self) -> axum::response::Response {
-///         (http::StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
-///     }
-/// }
-///
-/// async fn handler(tx: Tx<Sqlite, MyError>) {
-///     /* ... */
-/// }
-/// ```
 #[derive(Debug)]
-pub struct Tx<DB: sqlx::Database, E = Error>(Lease<sqlx::Transaction<'static, DB>>, PhantomData<E>);
+pub struct Tx<DB: sqlx::Database>(Lease<sqlx::Transaction<'static, DB>>);
 
-impl<DB: sqlx::Database, E> Tx<DB, E> {
+impl<DB: sqlx::Database> Tx<DB> {
     /// Explicitly commit the transaction.
     ///
     /// By default, the transaction will be committed when a successful response is returned
@@ -88,19 +56,19 @@ impl<DB: sqlx::Database, E> Tx<DB, E> {
     }
 }
 
-impl<DB: sqlx::Database, E> AsRef<sqlx::Transaction<'static, DB>> for Tx<DB, E> {
+impl<DB: sqlx::Database> AsRef<sqlx::Transaction<'static, DB>> for Tx<DB> {
     fn as_ref(&self) -> &sqlx::Transaction<'static, DB> {
         &self.0
     }
 }
 
-impl<DB: sqlx::Database, E> AsMut<sqlx::Transaction<'static, DB>> for Tx<DB, E> {
+impl<DB: sqlx::Database> AsMut<sqlx::Transaction<'static, DB>> for Tx<DB> {
     fn as_mut(&mut self) -> &mut sqlx::Transaction<'static, DB> {
         &mut self.0
     }
 }
 
-impl<DB: sqlx::Database, E> std::ops::Deref for Tx<DB, E> {
+impl<DB: sqlx::Database> std::ops::Deref for Tx<DB> {
     type Target = sqlx::Transaction<'static, DB>;
 
     fn deref(&self) -> &Self::Target {
@@ -108,35 +76,33 @@ impl<DB: sqlx::Database, E> std::ops::Deref for Tx<DB, E> {
     }
 }
 
-impl<DB: sqlx::Database, E> std::ops::DerefMut for Tx<DB, E> {
+impl<DB: sqlx::Database> std::ops::DerefMut for Tx<DB> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
-impl<DB: sqlx::Database, B, E> FromRequest<B> for Tx<DB, E>
-where
-    B: Send,
-    E: From<Error> + IntoResponse,
-{
-    type Rejection = E;
+impl<DB: sqlx::Database, S> FromRequestParts<S> for Tx<DB> {
+    type Rejection = TxRejection;
 
-    fn from_request<'req, 'ctx>(
-        req: &'req mut RequestParts<B>,
-    ) -> futures_core::future::BoxFuture<'ctx, Result<Self, Self::Rejection>>
+    fn from_request_parts<'life0, 'life1, 'async_trait>(
+        parts: &'life0 mut Parts,
+        _state: &'life1 S,
+    ) -> BoxFuture<'async_trait, Result<Self, Self::Rejection>>
     where
-        'req: 'ctx,
-        Self: 'ctx,
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
     {
         Box::pin(async move {
-            let ext: &mut Lazy<DB> = req
-                .extensions_mut()
+            let ext: &mut Lazy<DB> = parts
+                .extensions
                 .get_mut()
-                .ok_or(Error::MissingExtension)?;
+                .ok_or(TxRejection::MissingExtension)?;
 
             let tx = ext.get_or_begin().await?;
 
-            Ok(Self(tx, PhantomData))
+            Ok(Self(tx))
         })
     }
 }
@@ -173,7 +139,7 @@ struct Lazy<DB: sqlx::Database> {
 }
 
 impl<DB: sqlx::Database> Lazy<DB> {
-    async fn get_or_begin(&mut self) -> Result<Lease<Transaction<'static, DB>>, Error> {
+    async fn get_or_begin(&mut self) -> Result<Lease<Transaction<'static, DB>>, TxRejection> {
         let tx = if let Some(tx) = self.tx.as_mut() {
             tx
         } else {
@@ -181,7 +147,7 @@ impl<DB: sqlx::Database> Lazy<DB> {
             self.tx.insert(Slot::new(tx))
         };
 
-        tx.lease().ok_or(Error::OverlappingExtractors)
+        tx.lease().ok_or(TxRejection::OverlappingExtractors)
     }
 }
 
@@ -193,13 +159,11 @@ impl<DB: sqlx::Database> Lazy<DB> {
     feature = "sqlite"
 ))]
 mod sqlx_impls {
-    use std::fmt::Debug;
-
     use futures_core::{future::BoxFuture, stream::BoxStream};
 
     macro_rules! impl_executor {
         ($db:path) => {
-            impl<'c, E: Debug + Send> sqlx::Executor<'c> for &'c mut super::Tx<$db, E> {
+            impl<'c> sqlx::Executor<'c> for &'c mut super::Tx<$db> {
                 type Database = $db;
 
                 #[allow(clippy::type_complexity)]

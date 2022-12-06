@@ -1,9 +1,10 @@
-use axum::response::IntoResponse;
+use axum::{error_handling::HandleErrorLayer, handler::Handler};
+use http::StatusCode;
 use sqlx::{sqlite::SqliteArguments, Arguments as _};
 use tempfile::NamedTempFile;
-use tower::ServiceExt;
+use tower::{ServiceBuilder, ServiceExt};
 
-type Tx<E = axum_sqlx_tx::Error> = axum_sqlx_tx::Tx<sqlx::Sqlite, E>;
+type Tx = axum_sqlx_tx::Tx<sqlx::Sqlite>;
 
 #[tokio::test]
 async fn commit_on_success() {
@@ -71,7 +72,10 @@ async fn missing_layer() {
     assert!(response.status().is_server_error());
 
     let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
-    assert_eq!(body, format!("{}", axum_sqlx_tx::Error::MissingExtension));
+    assert_eq!(
+        body,
+        format!("{}", axum_sqlx_tx::TxRejection::MissingExtension)
+    );
 }
 
 #[tokio::test]
@@ -81,67 +85,8 @@ async fn overlapping_extractors() {
     assert!(response.status.is_server_error());
     assert_eq!(
         response.body,
-        format!("{}", axum_sqlx_tx::Error::OverlappingExtractors)
+        format!("{}", axum_sqlx_tx::TxRejection::OverlappingExtractors)
     );
-}
-
-#[tokio::test]
-async fn extractor_error_override() {
-    let (_, _, response) = build_app(|_: Tx, _: Tx<MyError>| async move {}).await;
-
-    assert!(response.status.is_client_error());
-    assert_eq!(response.body, "internal server error");
-}
-
-#[tokio::test]
-async fn layer_error_override() {
-    let db = NamedTempFile::new().unwrap();
-    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", db.path().display()))
-        .await
-        .unwrap();
-
-    sqlx::query("CREATE TABLE IF NOT EXISTS users (id INT PRIMARY KEY);")
-        .execute(&pool)
-        .await
-        .unwrap();
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS comments (
-            id INT PRIMARY KEY,
-            user_id INT,
-            FOREIGN KEY (user_id) REFERENCES users(id) DEFERRABLE INITIALLY DEFERRED
-        );"#,
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    let app = axum::Router::new()
-        .route(
-            "/",
-            axum::routing::get(|mut tx: Tx| async move {
-                sqlx::query("INSERT INTO comments VALUES (random(), random())")
-                    .execute(&mut tx)
-                    .await
-                    .unwrap();
-            }),
-        )
-        .layer(axum_sqlx_tx::Layer::new_with_error::<MyError>(pool.clone()));
-
-    let response = app
-        .oneshot(
-            http::Request::builder()
-                .uri("/")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let status = response.status();
-    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
-
-    assert!(status.is_client_error());
-    assert_eq!(body, "internal server error");
 }
 
 async fn insert_user(tx: &mut Tx, id: i32, name: &str) -> (i32, String) {
@@ -171,7 +116,7 @@ struct Response {
 
 async fn build_app<H, T>(handler: H) -> (NamedTempFile, sqlx::SqlitePool, Response)
 where
-    H: axum::handler::Handler<T, axum::body::Body>,
+    H: Handler<T, ()>,
     T: 'static,
 {
     let db = NamedTempFile::new().unwrap();
@@ -186,7 +131,16 @@ where
 
     let app = axum::Router::new()
         .route("/", axum::routing::get(handler))
-        .layer(axum_sqlx_tx::Layer::new(pool.clone()));
+        .layer(
+            ServiceBuilder::new()
+                .layer(HandleErrorLayer::new(|err| async move {
+                    println!("Error occurred while committing the transaction : {err:?}");
+
+                    (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
+                }))
+                .layer(axum_sqlx_tx::Layer::new(pool.clone())),
+        )
+        .with_state(());
 
     let response = app
         .oneshot(
@@ -201,18 +155,4 @@ where
     let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
 
     (db, pool, Response { status, body })
-}
-
-struct MyError(axum_sqlx_tx::Error);
-
-impl From<axum_sqlx_tx::Error> for MyError {
-    fn from(error: axum_sqlx_tx::Error) -> Self {
-        Self(error)
-    }
-}
-
-impl IntoResponse for MyError {
-    fn into_response(self) -> axum::response::Response {
-        (http::StatusCode::IM_A_TEAPOT, "internal server error").into_response()
-    }
 }

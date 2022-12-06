@@ -2,8 +2,9 @@
 
 use std::error::Error;
 
-use axum::{response::IntoResponse, routing::get, Json};
+use axum::{error_handling::HandleErrorLayer, response::IntoResponse, routing::get, Json};
 use http::StatusCode;
+use tower::ServiceBuilder;
 
 // OPTIONAL: use a type alias to avoid repeating your database type
 type Tx = axum_sqlx_tx::Tx<sqlx::Sqlite>;
@@ -23,7 +24,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let app = axum::Router::new()
         .route("/numbers", get(list_numbers).post(generate_number))
         // Apply the Tx middleware
-        .layer(axum_sqlx_tx::Layer::new(pool.clone()));
+        .layer(
+            ServiceBuilder::new()
+                .layer(HandleErrorLayer::new(|err| async move {
+                    // Tx layer will throw an error if there are any issues while committing the transaction.
+                    // So handle those cases and return error response accordingly.
+                    println!("Error occurred while committing the transaction : {err:?}");
+
+                    (
+                        http::StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal server error",
+                    )
+                }))
+                .layer(axum_sqlx_tx::Layer::new(pool)),
+        );
 
     let server = axum::Server::bind(&([0, 0, 0, 0], 0).into()).serve(app.into_make_service());
 
@@ -33,7 +47,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-async fn list_numbers(mut tx: Tx) -> Result<Json<Vec<i32>>, DbError> {
+async fn list_numbers(mut tx: Tx) -> Result<Json<Vec<i32>>, ApiError> {
     let numbers: Vec<(i32,)> = sqlx::query_as("SELECT * FROM numbers")
         .fetch_all(&mut tx)
         .await?;
@@ -41,7 +55,7 @@ async fn list_numbers(mut tx: Tx) -> Result<Json<Vec<i32>>, DbError> {
     Ok(Json(numbers.into_iter().map(|n| n.0).collect()))
 }
 
-async fn generate_number(mut tx: Tx) -> Result<(StatusCode, Json<i32>), DbError> {
+async fn generate_number(mut tx: Tx) -> Result<(StatusCode, Json<i32>), ApiError> {
     let (number,): (i32,) =
         sqlx::query_as("INSERT INTO numbers VALUES (random()) RETURNING number;")
             .fetch_one(&mut tx)
@@ -60,15 +74,15 @@ async fn generate_number(mut tx: Tx) -> Result<(StatusCode, Json<i32>), DbError>
 }
 
 // An sqlx::Error wrapper that implements IntoResponse
-struct DbError(sqlx::Error);
+struct ApiError(sqlx::Error);
 
-impl From<sqlx::Error> for DbError {
+impl From<sqlx::Error> for ApiError {
     fn from(error: sqlx::Error) -> Self {
         Self(error)
     }
 }
 
-impl IntoResponse for DbError {
+impl IntoResponse for ApiError {
     fn into_response(self) -> axum::response::Response {
         println!("ERROR: {}", self.0);
         (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
