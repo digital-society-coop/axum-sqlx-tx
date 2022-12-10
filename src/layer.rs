@@ -19,6 +19,7 @@ pub struct Layer<DB: sqlx::Database> {
     pool: sqlx::Pool<DB>,
 }
 
+// can't simply derive because `DB` isn't `Clone`
 impl<DB: sqlx::Database> Clone for Layer<DB> {
     fn clone(&self) -> Self {
         Self {

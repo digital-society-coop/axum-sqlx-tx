@@ -2,18 +2,23 @@
 
 use std::error::Error;
 
-use axum::{error_handling::HandleErrorLayer, response::IntoResponse, routing::get, Json};
+use axum::{
+    error_handling::HandleErrorLayer, extract::FromRequestParts, response::IntoResponse,
+    routing::get, Json,
+};
+use axum_sqlx_tx::TxRejection;
 use http::StatusCode;
 use tower::ServiceBuilder;
 
-// OPTIONAL: use a type alias to avoid repeating your database type
-type Tx = axum_sqlx_tx::Tx<sqlx::Sqlite>;
+// Use custom extractor to return custom error response
+#[derive(FromRequestParts)]
+#[from_request(rejection(ApiError))]
+pub struct SqliteTx(pub axum_sqlx_tx::Tx<sqlx::Sqlite>);
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     // You can use any sqlx::Pool
-    let db = tempfile::NamedTempFile::new()?;
-    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", db.path().display())).await?;
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await?;
 
     // Create a table (in a real application you might run migrations)
     sqlx::query("CREATE TABLE IF NOT EXISTS numbers (number INT PRIMARY KEY);")
@@ -27,14 +32,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .layer(
             ServiceBuilder::new()
                 .layer(HandleErrorLayer::new(|err| async move {
-                    // Tx layer will throw an error if there are any issues while committing the transaction.
-                    // So handle those cases and return error response accordingly.
+                    // Tx layer may throw an error if there are any error
+                    // while committing the transaction.
+
+                    // So handle those errors and return http response accordingly.
                     println!("Error occurred while committing the transaction : {err:?}");
 
-                    (
-                        http::StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal server error",
-                    )
+                    (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
                 }))
                 .layer(axum_sqlx_tx::Layer::new(pool)),
         );
@@ -47,7 +51,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-async fn list_numbers(mut tx: Tx) -> Result<Json<Vec<i32>>, ApiError> {
+async fn list_numbers(SqliteTx(mut tx): SqliteTx) -> Result<Json<Vec<i32>>, ApiError> {
     let numbers: Vec<(i32,)> = sqlx::query_as("SELECT * FROM numbers")
         .fetch_all(&mut tx)
         .await?;
@@ -55,7 +59,7 @@ async fn list_numbers(mut tx: Tx) -> Result<Json<Vec<i32>>, ApiError> {
     Ok(Json(numbers.into_iter().map(|n| n.0).collect()))
 }
 
-async fn generate_number(mut tx: Tx) -> Result<(StatusCode, Json<i32>), ApiError> {
+async fn generate_number(SqliteTx(mut tx): SqliteTx) -> Result<(StatusCode, Json<i32>), ApiError> {
     let (number,): (i32,) =
         sqlx::query_as("INSERT INTO numbers VALUES (random()) RETURNING number;")
             .fetch_one(&mut tx)
@@ -73,18 +77,30 @@ async fn generate_number(mut tx: Tx) -> Result<(StatusCode, Json<i32>), ApiError
     Ok((status, Json(number)))
 }
 
-// An sqlx::Error wrapper that implements IntoResponse
-struct ApiError(sqlx::Error);
+// A wrapper type for common api errors that implements IntoResponse
+#[derive(Debug)]
+pub enum ApiError {
+    DbError(sqlx::Error),
+    ExtractorError(TxRejection),
+}
 
+// implemented for easy error propagation of db error using ? operator
 impl From<sqlx::Error> for ApiError {
     fn from(error: sqlx::Error) -> Self {
-        Self(error)
+        Self::DbError(error)
+    }
+}
+
+// implemented as a helper so that FromRequestParts can be derived
+impl From<axum_sqlx_tx::TxRejection> for ApiError {
+    fn from(error: axum_sqlx_tx::TxRejection) -> Self {
+        Self::ExtractorError(error)
     }
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> axum::response::Response {
-        println!("ERROR: {}", self.0);
+        println!("ERROR: {:?}", self);
         (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
     }
 }

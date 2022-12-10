@@ -20,24 +20,27 @@
 //! To use the [`Tx`] extractor, you must first add [`Layer`] to your app:
 //!
 //! ```
+//! use axum::error_handling::HandleErrorLayer;
+//! use http::StatusCode;
+//! use tower::builder::ServiceBuilder;
+//!
 //! # async fn foo() {
 //! let pool = /* any sqlx::Pool */
 //! # sqlx::SqlitePool::connect(todo!()).await.unwrap();
 //! let app = axum::Router::new()
 //!     // .route(...)s
 //!     .layer(
-//!         tower::builder::ServiceBuilder::new()
-//!             .layer(axum::error_handling::HandleErrorLayer::new(|err| async move {
-//!             // Tx layer will throw an error if there are any issues while committing the transaction.
-//!             // So handle those cases and return error response accordingly.
-//!             println!("Error occurred while committing the transaction : {err:?}");
-//!
-//!             (
-//!                  http::StatusCode::INTERNAL_SERVER_ERROR,
-//!                  "internal server error",
-//!             )
-//!         }))
-//!     .layer(axum_sqlx_tx::Layer::new(pool)),
+//!         ServiceBuilder::new()
+//!             .layer(HandleErrorLayer::new(|err| async move {
+//!                 // Tx layer may throw an error if there are any error
+//!                 // while committing the transaction.
+//!         
+//!                 // So handle those errors and return http response accordingly.
+//!                 println!("Error occurred while committing the transaction : {err:?}");
+//!                 
+//!                 (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
+//!             }))
+//!             .layer(axum_sqlx_tx::Layer::new(pool))
 //!     );
 //! # axum::Server::bind(todo!()).serve(app.into_make_service());
 //! # }
@@ -63,26 +66,25 @@
 //! }
 //! ```
 //!
-//! If you forget to add the middleware you'll get [`Error::MissingExtension`] (internal server
-//! error) when using the extractor. You'll also get an error ([`Error::OverlappingExtractors`]) if
+//! If you forget to add the middleware you'll get [`TxRejection::MissingExtension`] (internal server
+//! error) when using the extractor. You'll also get [`TxRejection::OverlappingExtractors`] error if
 //! you have multiple `Tx` arguments in a single handler, or call `Tx::from_request` multiple times
 //! in a single middleware.
 //!
-//! ## Error handling
+//! ## Extractor Error handling
 //!
 //! `axum` requires that middleware do not return errors, and that the errors returned by extractors
-//! implement `IntoResponse`. By default, [`Error`](Error) is used by [`Layer`] and [`Tx`] to
+//! implement `IntoResponse`. By default, [`TxRejection`](TxRejection) is used by [`Tx`] extractor to
 //! convert errors into HTTP 500 responses, with the error's `Display` value as the response body,
-//! however it's generally not a good practice to return internal error details to clients!
-//!
-//! So use custom error responses to hide the implementation details.
-//! Refer: [Customizing extractor responses] (https://docs.rs/axum/latest/axum/extract/index.html#customizing-extractor-responses)
+//! however it's generally not a good practice to return internal error details to clients!.
+//! Refer `axum`'s [Customizing extractor responses][axum customizing extractor error] for futher details.
 //!
 //! # Examples
 //!
-//! See [`examples/`][examples] in the repo for more examples.
+//! See [`examples/`][examples] in the repo for more examples and how to customize extractor error.
 //!
 //! [examples]: https://github.com/wasdacraic/axum-sqlx-tx/tree/master/examples
+//! [axum customizing extractor error]: https://docs.rs/axum/latest/axum/extract/index.html#customizing-extractor-responses
 
 #![cfg_attr(doc, deny(warnings))]
 
@@ -100,10 +102,10 @@ pub use crate::{
 /// `axum` requires that the `FromRequestParts` `Rejection` implements `IntoResponse`, which this does
 /// by returning the `Display` representation of the variant. Note that this means returning
 /// configuration and database errors to clients, but you can override the error response by wrapping
-/// extractor rejections.
+/// extractor rejections. Refer `axum`'s [Customizing extractor responses][axum customizing extractor error]
+/// for futher details.
 ///
-/// Refer: [Customizing extractor responses] (https://docs.rs/axum/latest/axum/extract/index.html#customizing-extractor-responses)
-/// ```
+/// [axum customizing extractor error]: https://docs.rs/axum/latest/axum/extract/index.html#customizing-extractor-responses
 #[derive(Debug, thiserror::Error)]
 pub enum TxRejection {
     /// Indicates that the [`Layer`](crate::Layer) middleware was not installed.
@@ -128,9 +130,39 @@ impl axum_core::response::IntoResponse for TxRejection {
     }
 }
 
+/// Error which may occur while committing the changes done in the transaction.
+///
+/// `axum` requires `Service` layer to have `Infallible` error type.
+/// But since a transaction may fail during commit, that needs to be
+/// handled using the `HandleErrorLayer`.
+///
+/// ```
+/// use axum::error_handling::HandleErrorLayer;
+/// use http::StatusCode;
+/// use tower::builder::ServiceBuilder;
+///
+/// # async fn foo() {
+/// let pool = /* any sqlx::Pool */
+/// # sqlx::SqlitePool::connect(todo!()).await.unwrap();
+/// let tx_layer = ServiceBuilder::new()
+///     .layer(HandleErrorLayer::new(|err| async move {
+///         // Tx layer may throw an error if there are any error
+///         // while committing the transaction.
+///         
+///         // So handle those errors and return http response accordingly.
+///         println!("Error occurred while committing the transaction : {err:?}");
+///         
+///         (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
+///     }))
+///     .layer(axum_sqlx_tx::Layer::new(pool));
+/// # let app = axum::Router::new().layer(tx_layer);
+/// # axum::Server::bind(todo!()).serve(app.into_make_service());
+/// # }
+/// ```
 #[derive(Debug, thiserror::Error)]
 #[error(transparent)]
 pub struct TxLayerError(
-    // A database error occurred when committing the transaction
-    #[from] sqlx::Error,
+    /// A database error occurred when committing the transaction
+    #[from]
+    pub sqlx::Error,
 );

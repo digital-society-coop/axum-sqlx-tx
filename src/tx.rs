@@ -50,7 +50,7 @@ impl<DB: sqlx::Database> Tx<DB> {
     /// response). This method allows the transaction to be committed explicitly.
     ///
     /// **Note:** trying to use the `Tx` extractor again after calling `commit` will currently
-    /// generate [`Error::OverlappingExtractors`] errors. This may change in future.
+    /// generate [`TxRejection::OverlappingExtractors`] errors. This may change in future.
     pub async fn commit(self) -> Result<(), sqlx::Error> {
         self.0.steal().commit().await
     }
