@@ -6,8 +6,8 @@
 //! [`Tx`] is an `axum` [extractor][axum extractors] for obtaining a transaction that's bound to the
 //! HTTP request. A transaction begins the first time the extractor is used for a request, and is
 //! then stored in [request extensions] for use by other middleware/handlers. The transaction is
-//! resolved depending on the status code of the eventual response – successful (HTTP `2XX`)
-//! responses will cause the transaction to be committed, otherwise it will be rolled back.
+//! resolved depending on the status code of the eventual response – successful (HTTP `2XX` or
+//! `3XX`) responses will cause the transaction to be committed, otherwise it will be rolled back.
 //!
 //! This behaviour is often a sensible default, and using the extractor (e.g. rather than directly
 //! using [`sqlx::Transaction`]s) means you can't forget to commit the transactions!
