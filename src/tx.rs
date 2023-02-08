@@ -2,10 +2,8 @@
 
 use std::marker::PhantomData;
 
-use axum_core::{
-    extract::{FromRequest, RequestParts},
-    response::IntoResponse,
-};
+use axum_core::{extract::FromRequestParts, response::IntoResponse};
+use http::request::Parts;
 use sqlx::Transaction;
 
 use crate::{
@@ -114,25 +112,23 @@ impl<DB: sqlx::Database, E> std::ops::DerefMut for Tx<DB, E> {
     }
 }
 
-impl<DB: sqlx::Database, B, E> FromRequest<B> for Tx<DB, E>
+impl<DB: sqlx::Database, S, E> FromRequestParts<S> for Tx<DB, E>
 where
-    B: Send,
     E: From<Error> + IntoResponse,
 {
     type Rejection = E;
 
-    fn from_request<'req, 'ctx>(
-        req: &'req mut RequestParts<B>,
+    fn from_request_parts<'req, 'state, 'ctx>(
+        parts: &'req mut Parts,
+        _state: &'state S,
     ) -> futures_core::future::BoxFuture<'ctx, Result<Self, Self::Rejection>>
     where
-        'req: 'ctx,
         Self: 'ctx,
+        'req: 'ctx,
+        'state: 'ctx,
     {
         Box::pin(async move {
-            let ext: &mut Lazy<DB> = req
-                .extensions_mut()
-                .get_mut()
-                .ok_or(Error::MissingExtension)?;
+            let ext: &mut Lazy<DB> = parts.extensions.get_mut().ok_or(Error::MissingExtension)?;
 
             let tx = ext.get_or_begin().await?;
 
