@@ -188,7 +188,7 @@ struct Response {
 
 async fn build_app<H, T>(handler: H) -> (NamedTempFile, sqlx::SqlitePool, Response)
 where
-    H: axum::handler::Handler<T, axum::body::Body>,
+    H: axum::handler::Handler<T, (), axum::body::Body>,
     T: 'static,
 {
     let db = NamedTempFile::new().unwrap();

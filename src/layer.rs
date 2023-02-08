@@ -53,6 +53,15 @@ impl<DB: sqlx::Database> Layer<DB> {
     }
 }
 
+impl<DB: sqlx::Database, E> Clone for Layer<DB, E> {
+    fn clone(&self) -> Self {
+        Self {
+            pool: self.pool.clone(),
+            _error: self._error,
+        }
+    }
+}
+
 impl<DB: sqlx::Database, S, E> tower_layer::Layer<S> for Layer<DB, E> {
     type Service = Service<DB, S, E>;
 
