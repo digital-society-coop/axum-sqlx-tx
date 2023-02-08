@@ -11,8 +11,7 @@ type Tx = axum_sqlx_tx::Tx<sqlx::Sqlite>;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     // You can use any sqlx::Pool
-    let db = tempfile::NamedTempFile::new()?;
-    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", db.path().display())).await?;
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await?;
 
     // Create a table (in a real application you might run migrations)
     sqlx::query("CREATE TABLE IF NOT EXISTS numbers (number INT PRIMARY KEY);")
