@@ -6,6 +6,7 @@ use axum_core::{
     extract::{FromRef, FromRequestParts},
     response::IntoResponse,
 };
+use futures_core::{future::BoxFuture, stream::BoxStream};
 use http::request::Parts;
 use sqlx::Transaction;
 
@@ -219,96 +220,67 @@ impl<DB: sqlx::Database> Lazy<DB> {
     }
 }
 
-#[cfg(any(
-    feature = "any",
-    feature = "mysql",
-    feature = "postgres",
-    feature = "sqlite"
-))]
-mod sqlx_impls {
-    use std::fmt::Debug;
+impl<'c, DB, E> sqlx::Executor<'c> for &'c mut Tx<DB, E>
+where
+    DB: sqlx::Database,
+    for<'t> &'t mut DB::Connection: sqlx::Executor<'t, Database = DB>,
+    E: std::fmt::Debug + Send,
+{
+    type Database = DB;
 
-    use futures_core::{future::BoxFuture, stream::BoxStream};
-
-    macro_rules! impl_executor {
-        ($db:path) => {
-            impl<'c, E: Debug + Send> sqlx::Executor<'c> for &'c mut super::Tx<$db, E> {
-                type Database = $db;
-
-                #[allow(clippy::type_complexity)]
-                fn fetch_many<'e, 'q: 'e, Q: 'q>(
-                    self,
-                    query: Q,
-                ) -> BoxStream<
-                    'e,
-                    Result<
-                        sqlx::Either<
-                            <Self::Database as sqlx::Database>::QueryResult,
-                            <Self::Database as sqlx::Database>::Row,
-                        >,
-                        sqlx::Error,
-                    >,
-                >
-                where
-                    'c: 'e,
-                    Q: sqlx::Execute<'q, Self::Database>,
-                {
-                    (&mut **self).fetch_many(query)
-                }
-
-                fn fetch_optional<'e, 'q: 'e, Q: 'q>(
-                    self,
-                    query: Q,
-                ) -> BoxFuture<
-                    'e,
-                    Result<Option<<Self::Database as sqlx::Database>::Row>, sqlx::Error>,
-                >
-                where
-                    'c: 'e,
-                    Q: sqlx::Execute<'q, Self::Database>,
-                {
-                    (&mut **self).fetch_optional(query)
-                }
-
-                fn prepare_with<'e, 'q: 'e>(
-                    self,
-                    sql: &'q str,
-                    parameters: &'e [<Self::Database as sqlx::Database>::TypeInfo],
-                ) -> BoxFuture<
-                    'e,
-                    Result<
-                        <Self::Database as sqlx::database::HasStatement<'q>>::Statement,
-                        sqlx::Error,
-                    >,
-                >
-                where
-                    'c: 'e,
-                {
-                    (&mut **self).prepare_with(sql, parameters)
-                }
-
-                fn describe<'e, 'q: 'e>(
-                    self,
-                    sql: &'q str,
-                ) -> BoxFuture<'e, Result<sqlx::Describe<Self::Database>, sqlx::Error>>
-                where
-                    'c: 'e,
-                {
-                    (&mut **self).describe(sql)
-                }
-            }
-        };
+    #[allow(clippy::type_complexity)]
+    fn fetch_many<'e, 'q: 'e, Q: 'q>(
+        self,
+        query: Q,
+    ) -> BoxStream<
+        'e,
+        Result<
+            sqlx::Either<
+                <Self::Database as sqlx::Database>::QueryResult,
+                <Self::Database as sqlx::Database>::Row,
+            >,
+            sqlx::Error,
+        >,
+    >
+    where
+        'c: 'e,
+        Q: sqlx::Execute<'q, Self::Database>,
+    {
+        (&mut ***self).fetch_many(query)
     }
 
-    #[cfg(feature = "any")]
-    impl_executor!(sqlx::Any);
+    fn fetch_optional<'e, 'q: 'e, Q: 'q>(
+        self,
+        query: Q,
+    ) -> BoxFuture<'e, Result<Option<<Self::Database as sqlx::Database>::Row>, sqlx::Error>>
+    where
+        'c: 'e,
+        Q: sqlx::Execute<'q, Self::Database>,
+    {
+        (&mut ***self).fetch_optional(query)
+    }
 
-    #[cfg(feature = "mysql")]
-    impl_executor!(sqlx::MySql);
+    fn prepare_with<'e, 'q: 'e>(
+        self,
+        sql: &'q str,
+        parameters: &'e [<Self::Database as sqlx::Database>::TypeInfo],
+    ) -> BoxFuture<
+        'e,
+        Result<<Self::Database as sqlx::database::HasStatement<'q>>::Statement, sqlx::Error>,
+    >
+    where
+        'c: 'e,
+    {
+        (&mut ***self).prepare_with(sql, parameters)
+    }
 
-    #[cfg(feature = "postgres")]
-    impl_executor!(sqlx::Postgres);
-
-    #[cfg(feature = "sqlite")]
-    impl_executor!(sqlx::Sqlite);
+    fn describe<'e, 'q: 'e>(
+        self,
+        sql: &'q str,
+    ) -> BoxFuture<'e, Result<sqlx::Describe<Self::Database>, sqlx::Error>>
+    where
+        'c: 'e,
+    {
+        (&mut ***self).describe(sql)
+    }
 }
