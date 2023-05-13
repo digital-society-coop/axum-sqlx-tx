@@ -13,9 +13,8 @@ include = [
 ]
 
 [features]
-all-databases = ["any", "mssql", "mysql", "postgres", "sqlite"]
+all-databases = ["any", "mysql", "postgres", "sqlite"]
 any = ["sqlx/any"]
-mssql = ["sqlx/mssql"]
 mysql = ["sqlx/mysql"]
 postgres = ["sqlx/postgres"]
 sqlite = ["sqlx/sqlite"]
@@ -33,7 +32,7 @@ futures-core = "0.3"
 http = "0.2"
 http-body = "0.4"
 parking_lot = "0.12"
-sqlx = { version = "0.6", default-features = false }
+sqlx = { version = "0.7.0-alpha.2", default-features = false }
 thiserror = "1"
 tower-layer = "0.3"
 tower-service = "0.3"
