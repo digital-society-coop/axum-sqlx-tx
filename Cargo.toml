@@ -1,7 +1,7 @@
 [package]
 name = "axum-sqlx-tx"
 description = "Request-scoped SQLx transactions for axum"
-version = "0.5.0"
+version = "0.6.0"
 license = "MIT"
 repository = "https://github.com/wasdacraic/axum-sqlx-tx/"
 edition = "2021"
@@ -13,9 +13,8 @@ include = [
 ]
 
 [features]
-all-databases = ["any", "mssql", "mysql", "postgres", "sqlite"]
+all-databases = ["any", "mysql", "postgres", "sqlite"]
 any = ["sqlx/any"]
-mssql = ["sqlx/mssql"]
 mysql = ["sqlx/mysql"]
 postgres = ["sqlx/postgres"]
 sqlite = ["sqlx/sqlite"]
@@ -33,7 +32,7 @@ futures-core = "0.3"
 http = "0.2"
 http-body = "0.4"
 parking_lot = "0.12"
-sqlx = { version = "0.6", default-features = false }
+sqlx = { version = "0.7", default-features = false }
 thiserror = "1"
 tower-layer = "0.3"
 tower-service = "0.3"
@@ -43,5 +42,5 @@ axum-sqlx-tx = { path = ".", features = ["runtime-tokio-rustls", "sqlite"] }
 axum = "0.6.4"
 hyper = "0.14.17"
 tempfile = "3.3.0"
-tokio = { version = "1.17.0", features = ["macros"] }
+tokio = { version = "1.17.0", features = ["macros", "rt-multi-thread"] }
 tower = "0.4.12"
