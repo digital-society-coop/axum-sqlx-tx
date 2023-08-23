@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        db: ['', all-databases, mssql, mysql, postgres, sqlite]
+        db: ['', all-databases, mysql, postgres, sqlite]
         db_any: ['', any]
         runtime: [runtime-tokio-native-tls, runtime-tokio-rustls]
         exclude:
