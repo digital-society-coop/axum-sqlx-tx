@@ -183,7 +183,6 @@ impl<DB: sqlx::Database> Lazy<DB> {
 
 #[cfg(any(
     feature = "any",
-    feature = "mssql",
     feature = "mysql",
     feature = "postgres",
     feature = "sqlite"
@@ -265,9 +264,6 @@ mod sqlx_impls {
 
     #[cfg(feature = "any")]
     impl_executor!(sqlx::Any);
-
-    #[cfg(feature = "mssql")]
-    impl_executor!(sqlx::Mssql);
 
     #[cfg(feature = "mysql")]
     impl_executor!(sqlx::MySql);
