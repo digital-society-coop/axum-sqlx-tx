@@ -58,7 +58,7 @@
 //! ## Error handling
 //!
 //! `axum` requires that middleware do not return errors, and that the errors returned by extractors
-//! implement `IntoResponse`. By default, [`Error`](Error) is used by [`Layer`] and [`Tx`] to
+//! implement `IntoResponse`. By default, [`Error`] is used by [`Layer`] and [`Tx`] to
 //! convert errors into HTTP 500 responses, with the error's `Display` value as the response body,
 //! however it's generally not a good practice to return internal error details to clients!
 //!
@@ -107,7 +107,7 @@
 //!
 //! See [`examples/`][examples] in the repo for more examples.
 //!
-//! [examples]: https://github.com/wasdacraic/axum-sqlx-tx/tree/master/examples
+//! [examples]: https://github.com/digital-society-coop/axum-sqlx-tx/tree/master/examples
 
 #![cfg_attr(doc, deny(warnings))]
 
@@ -154,7 +154,7 @@ pub use crate::{
 /// ```
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// Indicates that the [`Layer`](crate::Layer) middleware was not installed.
+    /// Indicates that the [`Layer`] middleware was not installed.
     #[error("required extension not registered; did you add the axum_sqlx_tx::Layer middleware?")]
     MissingExtension,
 
