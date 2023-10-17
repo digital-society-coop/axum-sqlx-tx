@@ -107,7 +107,7 @@
 //!
 //! See [`examples/`][examples] in the repo for more examples.
 //!
-//! [examples]: https://github.com/wasdacraic/axum-sqlx-tx/tree/master/examples
+//! [examples]: https://github.com/digital-society-coop/axum-sqlx-tx/tree/master/examples
 
 #![cfg_attr(doc, deny(warnings))]
 
