@@ -1,4 +1,4 @@
-use axum::response::IntoResponse;
+use axum::{middleware, response::IntoResponse};
 use sqlx::{sqlite::SqliteArguments, Arguments as _};
 use tempfile::NamedTempFile;
 use tower::ServiceExt;
@@ -70,6 +70,60 @@ async fn explicit_commit() {
         get_users(&pool).await,
         vec![(1, "michael oxmaul".to_string())]
     );
+}
+
+#[tokio::test]
+async fn extract_from_middleware_and_handler() {
+    let db = NamedTempFile::new().unwrap();
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", db.path().display()))
+        .await
+        .unwrap();
+
+    sqlx::query("CREATE TABLE IF NOT EXISTS users (id INT PRIMARY KEY, name TEXT);")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    async fn test_middleware<B>(
+        mut tx: Tx,
+        req: http::Request<B>,
+        next: middleware::Next<B>,
+    ) -> impl IntoResponse {
+        insert_user(&mut tx, 1, "bobby tables").await;
+
+        // If we explicitly drop `tx` it should be consumable from the next handler.
+        drop(tx);
+        next.run(req).await
+    }
+
+    let app = axum::Router::new()
+        .route(
+            "/",
+            axum::routing::get(|mut tx: Tx| async move {
+                let users: Vec<(i32, String)> = sqlx::query_as("SELECT * FROM users")
+                    .fetch_all(&mut tx)
+                    .await
+                    .unwrap();
+                axum::Json(users)
+            }),
+        )
+        .layer(middleware::from_fn(test_middleware))
+        .layer(axum_sqlx_tx::Layer::new(pool.clone()));
+
+    let response = app
+        .oneshot(
+            http::Request::builder()
+                .uri("/")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+
+    assert!(status.is_success());
+    assert_eq!(body.as_ref(), b"[[1,\"bobby tables\"]]");
 }
 
 #[tokio::test]
