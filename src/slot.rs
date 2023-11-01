@@ -4,7 +4,7 @@
 //! Conceptually, the `Slot<T>` is the "primary" owner of the value, and access can be leased to one
 //! other owner through an associated `Lease<T>`.
 //!
-//! It's implemented as a wrapper around an `Arc<Mutex<Option_>>>`, where the `Slot` `take`s the
+//! It's implemented as a wrapper around an `Arc<Mutex<Option<_>>>`, where the `Slot` `take`s the
 //! value from the `Option` on lease, and the `Lease` puts it back in on drop.
 //!
 //! Note that while this is **safe** to use across threads (it is `Send` + `Sync`), concurrently
