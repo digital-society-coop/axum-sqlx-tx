@@ -17,15 +17,20 @@
 //!
 //! # Usage
 //!
-//! To use the [`Tx`] extractor, you must first add [`Layer`] to your app:
+//! To use the [`Tx`] extractor, you must first add [`State`] and [`Layer`] to your app:
 //!
 //! ```
 //! # async fn foo() {
 //! let pool = /* any sqlx::Pool */
 //! # sqlx::SqlitePool::connect(todo!()).await.unwrap();
+//!
+//! let (layer, state) = axum_sqlx_tx::Layer::new(pool);
+//!
 //! let app = axum::Router::new()
 //!     // .route(...)s
-//!     .layer(axum_sqlx_tx::Layer::new(pool));
+//! #   .route("/", axum::routing::get(|tx: axum_sqlx_tx::Tx<sqlx::Sqlite>| async move {}))
+//!     .layer(layer)
+//!     .with_state(state);
 //! # axum::Server::bind(todo!()).serve(app.into_make_service());
 //! # }
 //! ```
@@ -67,7 +72,7 @@
 //! the response.
 //!
 //! ```
-//! use axum::response::IntoResponse;
+//! use axum::{response::IntoResponse, routing::post};
 //! use axum_sqlx_tx::Tx;
 //! use sqlx::Sqlite;
 //!
@@ -91,9 +96,13 @@
 //! // Change the layer error type
 //! # async fn foo() {
 //! # let pool: sqlx::SqlitePool = todo!();
+//!
+//! let (layer, state) = axum_sqlx_tx::Layer::new_with_error::<MyError>(pool);
+//!
 //! let app = axum::Router::new()
-//!     // .route(...)s
-//!     .layer(axum_sqlx_tx::Layer::new_with_error::<MyError>(pool));
+//!     .route("/", post(create_user))
+//!     .layer(layer)
+//!     .with_state(state);
 //! # axum::Server::bind(todo!()).serve(app.into_make_service());
 //! # }
 //!
@@ -119,6 +128,37 @@ pub use crate::{
     layer::{Layer, Service},
     tx::Tx,
 };
+
+/// Application state that enables the [`Tx`] extractor.
+///
+/// `State` must be provided to `Router`s in order to use the [`Tx`] extractor, or else attempting
+/// to use the `Router` will not compile.
+///
+/// `State` is constructed via [`Layer::new`](crate::Layer::new), which also returns a
+/// [middleware](crate::Layer). The state and the middleware together enable the [`Tx`] extractor to
+/// work.
+#[derive(Debug)]
+pub struct State<DB: sqlx::Database> {
+    pool: sqlx::Pool<DB>,
+}
+
+impl<DB: sqlx::Database> State<DB> {
+    pub(crate) fn new(pool: sqlx::Pool<DB>) -> Self {
+        Self { pool }
+    }
+
+    pub(crate) async fn transaction(&self) -> Result<sqlx::Transaction<'static, DB>, sqlx::Error> {
+        self.pool.begin().await
+    }
+}
+
+impl<DB: sqlx::Database> Clone for State<DB> {
+    fn clone(&self) -> Self {
+        Self {
+            pool: self.pool.clone(),
+        }
+    }
+}
 
 /// Possible errors when extracting [`Tx`] from a request.
 ///

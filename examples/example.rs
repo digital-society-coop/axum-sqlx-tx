@@ -19,11 +19,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .execute(&pool)
         .await?;
 
+    let (layer, state) = axum_sqlx_tx::Layer::new(pool.clone());
+
     // Standard axum app setup
     let app = axum::Router::new()
         .route("/numbers", get(list_numbers).post(generate_number))
         // Apply the Tx middleware
-        .layer(axum_sqlx_tx::Layer::new(pool.clone()));
+        .layer(layer)
+        // Add the Tx state
+        .with_state(state);
 
     let server = axum::Server::bind(&([0, 0, 0, 0], 0).into()).serve(app.into_make_service());
 

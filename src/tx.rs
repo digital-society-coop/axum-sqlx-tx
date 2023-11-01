@@ -2,13 +2,16 @@
 
 use std::marker::PhantomData;
 
-use axum_core::{extract::FromRequestParts, response::IntoResponse};
+use axum_core::{
+    extract::{FromRef, FromRequestParts},
+    response::IntoResponse,
+};
 use http::request::Parts;
 use sqlx::Transaction;
 
 use crate::{
     slot::{Lease, Slot},
-    Error,
+    Error, State,
 };
 
 /// An `axum` extractor for a database transaction.
@@ -115,6 +118,7 @@ impl<DB: sqlx::Database, E> std::ops::DerefMut for Tx<DB, E> {
 impl<DB: sqlx::Database, S, E> FromRequestParts<S> for Tx<DB, E>
 where
     E: From<Error> + IntoResponse,
+    State<DB>: FromRef<S>,
 {
     type Rejection = E;
 
@@ -145,9 +149,9 @@ impl<DB: sqlx::Database> TxSlot<DB> {
     ///
     /// When the request extensions are dropped, `commit` can be called to commit the transaction
     /// (if any).
-    pub(crate) fn bind(extensions: &mut http::Extensions, pool: sqlx::Pool<DB>) -> Self {
+    pub(crate) fn bind(extensions: &mut http::Extensions, state: State<DB>) -> Self {
         let (slot, tx) = Slot::new_leased(None);
-        extensions.insert(Lazy { pool, tx });
+        extensions.insert(Lazy { state, tx });
         Self(slot)
     }
 
@@ -164,7 +168,7 @@ impl<DB: sqlx::Database> TxSlot<DB> {
 /// When the transaction is started, it's inserted into the `Option` leased from the `TxSlot`, so
 /// that when `Lazy` is dropped the transaction is moved to the `TxSlot`.
 struct Lazy<DB: sqlx::Database> {
-    pool: sqlx::Pool<DB>,
+    state: State<DB>,
     tx: Lease<Option<Slot<Transaction<'static, DB>>>>,
 }
 
@@ -173,7 +177,7 @@ impl<DB: sqlx::Database> Lazy<DB> {
         let tx = if let Some(tx) = self.tx.as_mut() {
             tx
         } else {
-            let tx = self.pool.begin().await?;
+            let tx = self.state.transaction().await?;
             self.tx.insert(Slot::new(tx))
         };
 
