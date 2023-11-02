@@ -1,9 +1,10 @@
 use axum::{middleware, response::IntoResponse};
+use axum_sqlx_tx::State;
 use sqlx::{sqlite::SqliteArguments, Arguments as _};
 use tempfile::NamedTempFile;
 use tower::ServiceExt;
 
-type Tx<E = axum_sqlx_tx::Error> = axum_sqlx_tx::Tx<sqlx::Sqlite, E>;
+type Tx = axum_sqlx_tx::Tx<sqlx::Sqlite>;
 
 #[tokio::test]
 async fn commit_on_success() {
@@ -96,6 +97,8 @@ async fn extract_from_middleware_and_handler() {
         next.run(req).await
     }
 
+    let (state, layer) = Tx::setup(pool);
+
     let app = axum::Router::new()
         .route(
             "/",
@@ -107,8 +110,12 @@ async fn extract_from_middleware_and_handler() {
                 axum::Json(users)
             }),
         )
-        .layer(middleware::from_fn(test_middleware))
-        .layer(axum_sqlx_tx::Layer::new(pool.clone()));
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            test_middleware,
+        ))
+        .layer(layer)
+        .with_state(state);
 
     let response = app
         .oneshot(
@@ -127,8 +134,55 @@ async fn extract_from_middleware_and_handler() {
 }
 
 #[tokio::test]
+async fn substates() {
+    #[derive(Clone)]
+    struct MyState {
+        state: State<sqlx::Sqlite>,
+    }
+
+    impl axum_core::extract::FromRef<MyState> for State<sqlx::Sqlite> {
+        fn from_ref(state: &MyState) -> Self {
+            state.state.clone()
+        }
+    }
+
+    let db = NamedTempFile::new().unwrap();
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", db.path().display()))
+        .await
+        .unwrap();
+
+    let (state, layer) = Tx::setup(pool);
+
+    let app = axum::Router::new()
+        .route("/", axum::routing::get(|_: Tx| async move {}))
+        .layer(layer)
+        .with_state(MyState { state });
+    let response = app
+        .oneshot(
+            http::Request::builder()
+                .uri("/")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert!(response.status().is_success());
+}
+
+#[tokio::test]
 async fn missing_layer() {
-    let app = axum::Router::new().route("/", axum::routing::get(|_: Tx| async move {}));
+    let db = NamedTempFile::new().unwrap();
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", db.path().display()))
+        .await
+        .unwrap();
+
+    // Note that we have to explicitly ignore the `_layer`, making it hard to do this accidentally.
+    let (state, _layer) = Tx::setup(pool);
+
+    let app = axum::Router::new()
+        .route("/", axum::routing::get(|_: Tx| async move {}))
+        .with_state(state);
     let response = app
         .oneshot(
             http::Request::builder()
@@ -158,7 +212,8 @@ async fn overlapping_extractors() {
 
 #[tokio::test]
 async fn extractor_error_override() {
-    let (_, _, response) = build_app(|_: Tx, _: Tx<MyError>| async move {}).await;
+    let (_, _, response) =
+        build_app(|_: Tx, _: axum_sqlx_tx::Tx<sqlx::Sqlite, MyExtractorError>| async move {}).await;
 
     assert!(response.status.is_client_error());
     assert_eq!(response.body, "internal server error");
@@ -187,6 +242,8 @@ async fn layer_error_override() {
     .await
     .unwrap();
 
+    let (state, layer) = Tx::config(pool).layer_error::<MyLayerError>().setup();
+
     let app = axum::Router::new()
         .route(
             "/",
@@ -197,7 +254,8 @@ async fn layer_error_override() {
                     .unwrap();
             }),
         )
-        .layer(axum_sqlx_tx::Layer::new_with_error::<MyError>(pool.clone()));
+        .layer(layer)
+        .with_state(state);
 
     let response = app
         .oneshot(
@@ -242,7 +300,7 @@ struct Response {
 
 async fn build_app<H, T>(handler: H) -> (NamedTempFile, sqlx::SqlitePool, Response)
 where
-    H: axum::handler::Handler<T, (), axum::body::Body>,
+    H: axum::handler::Handler<T, State<sqlx::Sqlite>, axum::body::Body>,
     T: 'static,
 {
     let db = NamedTempFile::new().unwrap();
@@ -255,9 +313,12 @@ where
         .await
         .unwrap();
 
+    let (state, layer) = Tx::setup(pool.clone());
+
     let app = axum::Router::new()
         .route("/", axum::routing::get(handler))
-        .layer(axum_sqlx_tx::Layer::new(pool.clone()));
+        .layer(layer)
+        .with_state(state);
 
     let response = app
         .oneshot(
@@ -274,15 +335,29 @@ where
     (db, pool, Response { status, body })
 }
 
-struct MyError(axum_sqlx_tx::Error);
+struct MyExtractorError(axum_sqlx_tx::Error);
 
-impl From<axum_sqlx_tx::Error> for MyError {
+impl From<axum_sqlx_tx::Error> for MyExtractorError {
     fn from(error: axum_sqlx_tx::Error) -> Self {
         Self(error)
     }
 }
 
-impl IntoResponse for MyError {
+impl IntoResponse for MyExtractorError {
+    fn into_response(self) -> axum::response::Response {
+        (http::StatusCode::IM_A_TEAPOT, "internal server error").into_response()
+    }
+}
+
+struct MyLayerError(sqlx::Error);
+
+impl From<sqlx::Error> for MyLayerError {
+    fn from(error: sqlx::Error) -> Self {
+        Self(error)
+    }
+}
+
+impl IntoResponse for MyLayerError {
     fn into_response(self) -> axum::response::Response {
         (http::StatusCode::IM_A_TEAPOT, "internal server error").into_response()
     }

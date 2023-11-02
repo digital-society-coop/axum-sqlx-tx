@@ -5,7 +5,7 @@ use std::error::Error;
 use axum::{response::IntoResponse, routing::get, Json};
 use http::StatusCode;
 
-// OPTIONAL: use a type alias to avoid repeating your database type
+// Recommended: use a type alias to avoid repeating your database type
 type Tx = axum_sqlx_tx::Tx<sqlx::Sqlite>;
 
 #[tokio::main]
@@ -19,11 +19,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .execute(&pool)
         .await?;
 
+    let (state, layer) = Tx::setup(pool);
+
     // Standard axum app setup
     let app = axum::Router::new()
         .route("/numbers", get(list_numbers).post(generate_number))
         // Apply the Tx middleware
-        .layer(axum_sqlx_tx::Layer::new(pool.clone()));
+        .layer(layer)
+        // Add the Tx state
+        .with_state(state);
 
     let server = axum::Server::bind(&([0, 0, 0, 0], 0).into()).serve(app.into_make_service());
 

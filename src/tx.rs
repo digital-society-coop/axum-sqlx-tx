@@ -2,13 +2,16 @@
 
 use std::marker::PhantomData;
 
-use axum_core::{extract::FromRequestParts, response::IntoResponse};
+use axum_core::{
+    extract::{FromRef, FromRequestParts},
+    response::IntoResponse,
+};
 use http::request::Parts;
 use sqlx::Transaction;
 
 use crate::{
     slot::{Lease, Slot},
-    Error,
+    Config, Error, State,
 };
 
 /// An `axum` extractor for a database transaction.
@@ -73,11 +76,45 @@ use crate::{
 pub struct Tx<DB: sqlx::Database, E = Error>(Lease<sqlx::Transaction<'static, DB>>, PhantomData<E>);
 
 impl<DB: sqlx::Database, E> Tx<DB, E> {
+    /// Crate a [`State`] and [`Layer`](crate::Layer) to enable the extractor.
+    ///
+    /// This is convenient to use from a type alias, e.g.
+    ///
+    /// ```
+    /// # async fn foo() {
+    /// type Tx = axum_sqlx_tx::Tx<sqlx::Sqlite>;
+    ///
+    /// let pool: sqlx::SqlitePool = todo!();
+    /// let (state, layer) = Tx::setup(pool);
+    /// # }
+    /// ```
+    pub fn setup(pool: sqlx::Pool<DB>) -> (State<DB>, crate::Layer<DB, Error>) {
+        Config::new(pool).setup()
+    }
+
+    /// Configure extractor behaviour.
+    ///
+    /// See the [`Config`] API for available options.
+    ///
+    /// This is convenient to use from a type alias, e.g.
+    ///
+    /// ```
+    /// # async fn foo() {
+    /// type Tx = axum_sqlx_tx::Tx<sqlx::Sqlite>;
+    ///
+    /// # let pool: sqlx::SqlitePool = todo!();
+    /// let config = Tx::config(pool);
+    /// # }
+    /// ```
+    pub fn config(pool: sqlx::Pool<DB>) -> Config<DB, Error> {
+        Config::new(pool)
+    }
+
     /// Explicitly commit the transaction.
     ///
     /// By default, the transaction will be committed when a successful response is returned
-    /// (specifically, when the [`Service`](crate::Service) middleware intercepts an HTTP `2XX`
-    /// response). This method allows the transaction to be committed explicitly.
+    /// (specifically, when the [`Service`](crate::Service) middleware intercepts an HTTP `2XX` or
+    /// `3XX` response). This method allows the transaction to be committed explicitly.
     ///
     /// **Note:** trying to use the `Tx` extractor again after calling `commit` will currently
     /// generate [`Error::OverlappingExtractors`] errors. This may change in future.
@@ -115,6 +152,7 @@ impl<DB: sqlx::Database, E> std::ops::DerefMut for Tx<DB, E> {
 impl<DB: sqlx::Database, S, E> FromRequestParts<S> for Tx<DB, E>
 where
     E: From<Error> + IntoResponse,
+    State<DB>: FromRef<S>,
 {
     type Rejection = E;
 
@@ -145,9 +183,9 @@ impl<DB: sqlx::Database> TxSlot<DB> {
     ///
     /// When the request extensions are dropped, `commit` can be called to commit the transaction
     /// (if any).
-    pub(crate) fn bind(extensions: &mut http::Extensions, pool: sqlx::Pool<DB>) -> Self {
+    pub(crate) fn bind(extensions: &mut http::Extensions, state: State<DB>) -> Self {
         let (slot, tx) = Slot::new_leased(None);
-        extensions.insert(Lazy { pool, tx });
+        extensions.insert(Lazy { state, tx });
         Self(slot)
     }
 
@@ -164,7 +202,7 @@ impl<DB: sqlx::Database> TxSlot<DB> {
 /// When the transaction is started, it's inserted into the `Option` leased from the `TxSlot`, so
 /// that when `Lazy` is dropped the transaction is moved to the `TxSlot`.
 struct Lazy<DB: sqlx::Database> {
-    pool: sqlx::Pool<DB>,
+    state: State<DB>,
     tx: Lease<Option<Slot<Transaction<'static, DB>>>>,
 }
 
@@ -173,7 +211,7 @@ impl<DB: sqlx::Database> Lazy<DB> {
         let tx = if let Some(tx) = self.tx.as_mut() {
             tx
         } else {
-            let tx = self.pool.begin().await?;
+            let tx = self.state.transaction().await?;
             self.tx.insert(Slot::new(tx))
         };
 
