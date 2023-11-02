@@ -4,7 +4,7 @@ use sqlx::{sqlite::SqliteArguments, Arguments as _};
 use tempfile::NamedTempFile;
 use tower::ServiceExt;
 
-type Tx<E = axum_sqlx_tx::Error> = axum_sqlx_tx::Tx<sqlx::Sqlite, E>;
+type Tx = axum_sqlx_tx::Tx<sqlx::Sqlite>;
 
 #[tokio::test]
 async fn commit_on_success() {
@@ -97,7 +97,7 @@ async fn extract_from_middleware_and_handler() {
         next.run(req).await
     }
 
-    let (layer, state) = axum_sqlx_tx::Layer::new(pool.clone());
+    let (state, layer) = Tx::setup(pool);
 
     let app = axum::Router::new()
         .route(
@@ -151,7 +151,7 @@ async fn substates() {
         .await
         .unwrap();
 
-    let (layer, state) = axum_sqlx_tx::Layer::new(pool);
+    let (state, layer) = Tx::setup(pool);
 
     let app = axum::Router::new()
         .route("/", axum::routing::get(|_: Tx| async move {}))
@@ -178,7 +178,7 @@ async fn missing_layer() {
         .unwrap();
 
     // Note that we have to explicitly ignore the `_layer`, making it hard to do this accidentally.
-    let (_layer, state) = axum_sqlx_tx::Layer::new(pool);
+    let (state, _layer) = Tx::setup(pool);
 
     let app = axum::Router::new()
         .route("/", axum::routing::get(|_: Tx| async move {}))
@@ -212,7 +212,8 @@ async fn overlapping_extractors() {
 
 #[tokio::test]
 async fn extractor_error_override() {
-    let (_, _, response) = build_app(|_: Tx, _: Tx<MyError>| async move {}).await;
+    let (_, _, response) =
+        build_app(|_: Tx, _: axum_sqlx_tx::Tx<sqlx::Sqlite, MyError>| async move {}).await;
 
     assert!(response.status.is_client_error());
     assert_eq!(response.body, "internal server error");
@@ -241,7 +242,7 @@ async fn layer_error_override() {
     .await
     .unwrap();
 
-    let (layer, state) = axum_sqlx_tx::Layer::new_with_error::<MyError>(pool.clone());
+    let (state, layer) = Tx::config(pool).layer_error::<MyError>().setup();
 
     let app = axum::Router::new()
         .route(
@@ -312,7 +313,7 @@ where
         .await
         .unwrap();
 
-    let (layer, state) = axum_sqlx_tx::Layer::new(pool.clone());
+    let (state, layer) = Tx::setup(pool.clone());
 
     let app = axum::Router::new()
         .route("/", axum::routing::get(handler))

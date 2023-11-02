@@ -17,18 +17,22 @@
 //!
 //! # Usage
 //!
-//! To use the [`Tx`] extractor, you must first add [`State`] and [`Layer`] to your app:
+//! To use the [`Tx`] extractor, you must first add [`State`] and [`Layer`] to your app. [`State`]
+//! holds the configuration for the extractor, and the [`Layer`] middleware manages the
+//! request-bound transaction.
 //!
 //! ```
 //! # async fn foo() {
-//! let pool = /* any sqlx::Pool */
-//! # sqlx::SqlitePool::connect(todo!()).await.unwrap();
+//! // It's recommended to create aliases specialised for your extractor(s)
+//! type Tx = axum_sqlx_tx::Tx<sqlx::Sqlite>;
 //!
-//! let (layer, state) = axum_sqlx_tx::Layer::new(pool);
+//! let pool = sqlx::SqlitePool::connect("...").await.unwrap();
+//!
+//! let (state, layer) = Tx::setup(pool);
 //!
 //! let app = axum::Router::new()
 //!     // .route(...)s
-//! #   .route("/", axum::routing::get(|tx: axum_sqlx_tx::Tx<sqlx::Sqlite>| async move {}))
+//! #   .route("/", axum::routing::get(|tx: Tx| async move {}))
 //!     .layer(layer)
 //!     .with_state(state);
 //! # axum::Server::bind(todo!()).serve(app.into_make_service());
@@ -38,10 +42,9 @@
 //! You can then simply add [`Tx`] as an argument to your handlers:
 //!
 //! ```
-//! use axum_sqlx_tx::Tx;
-//! use sqlx::Sqlite;
+//! type Tx = axum_sqlx_tx::Tx<sqlx::Sqlite>;
 //!
-//! async fn create_user(mut tx: Tx<Sqlite>, /* ... */) {
+//! async fn create_user(mut tx: Tx, /* ... */) {
 //!     // `&mut Tx` implements `sqlx::Executor`
 //!     let user = sqlx::query("INSERT INTO users (...) VALUES (...)")
 //!         .fetch_one(&mut tx)
@@ -55,62 +58,14 @@
 //! }
 //! ```
 //!
-//! If you forget to add the middleware you'll get [`Error::MissingExtension`] (internal server
-//! error) when using the extractor. You'll also get an error ([`Error::OverlappingExtractors`]) if
-//! you have multiple `Tx` arguments in a single handler, or call `Tx::from_request` multiple times
-//! in a single middleware.
-//!
 //! ## Error handling
 //!
-//! `axum` requires that middleware do not return errors, and that the errors returned by extractors
-//! implement `IntoResponse`. By default, [`Error`] is used by [`Layer`] and [`Tx`] to
-//! convert errors into HTTP 500 responses, with the error's `Display` value as the response body,
-//! however it's generally not a good practice to return internal error details to clients!
+//! `axum` requires that errors can be turned into responses. The [`Error`] type converts into a
+//! HTTP 500 response with the error message as the response body. This may be suitable for
+//! development or internal services but it's generally not advisable to return internal error
+//! details to clients.
 //!
-//! To make it easier to customise error handling, both [`Layer`] and [`Tx`] have a second generic
-//! type parameter, `E`, that can be used to override the error type that will be used to convert
-//! the response.
-//!
-//! ```
-//! use axum::{response::IntoResponse, routing::post};
-//! use axum_sqlx_tx::Tx;
-//! use sqlx::Sqlite;
-//!
-//! struct MyError(axum_sqlx_tx::Error);
-//!
-//! // Errors must implement From<axum_sqlx_tx::Error>
-//! impl From<axum_sqlx_tx::Error> for MyError {
-//!     fn from(error: axum_sqlx_tx::Error) -> Self {
-//!         Self(error)
-//!     }
-//! }
-//!
-//! // Errors must implement IntoResponse
-//! impl IntoResponse for MyError {
-//!     fn into_response(self) -> axum::response::Response {
-//!         // note that you would probably want to log the error or something
-//!         (http::StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
-//!     }
-//! }
-//!
-//! // Change the layer error type
-//! # async fn foo() {
-//! # let pool: sqlx::SqlitePool = todo!();
-//!
-//! let (layer, state) = axum_sqlx_tx::Layer::new_with_error::<MyError>(pool);
-//!
-//! let app = axum::Router::new()
-//!     .route("/", post(create_user))
-//!     .layer(layer)
-//!     .with_state(state);
-//! # axum::Server::bind(todo!()).serve(app.into_make_service());
-//! # }
-//!
-//! // Change the extractor error type
-//! async fn create_user(mut tx: Tx<Sqlite, MyError>, /* ... */) {
-//!     /* ... */
-//! }
-//! ```
+//! See [`Error`] for how to customise error handling.
 //!
 //! # Examples
 //!
@@ -133,9 +88,9 @@ pub use crate::{
 
 /// Configuration for [`Tx`] extractors.
 ///
-/// Use `Config` to configure and build the [`State`] and [`Layer`] supporting [`Tx`] extractors.
+/// Use `Config` to configure and create a [`State`] and [`Layer`].
 ///
-/// A new `Config` can be constructed using [`Tx::config`].
+/// Access the `Config` API from [`Tx::config`].
 ///
 /// ```
 /// # async fn foo() {
@@ -159,9 +114,6 @@ impl<DB: sqlx::Database, LayerError> Config<DB, LayerError> {
     }
 
     /// Change the layer error type.
-    ///
-    /// The [`Layer`] middleware can return an error if the transaction fails to commit after a
-    /// successful response.
     pub fn layer_error<E>(self) -> Config<DB, E>
     where
         Error: Into<E>,
@@ -174,8 +126,9 @@ impl<DB: sqlx::Database, LayerError> Config<DB, LayerError> {
 
     /// Create a [`State`] and [`Layer`] to enable the [`Tx`] extractor.
     pub fn setup(self) -> (State<DB>, Layer<DB, LayerError>) {
-        let (layer, state) = Layer::new(self.pool);
-        (state, layer.with_error())
+        let state = State::new(self.pool);
+        let layer = Layer::new(state.clone());
+        (state, layer)
     }
 }
 
@@ -184,9 +137,8 @@ impl<DB: sqlx::Database, LayerError> Config<DB, LayerError> {
 /// `State` must be provided to `Router`s in order to use the [`Tx`] extractor, or else attempting
 /// to use the `Router` will not compile.
 ///
-/// `State` is constructed via [`Layer::new`](crate::Layer::new), which also returns a
-/// [middleware](crate::Layer). The state and the middleware together enable the [`Tx`] extractor to
-/// work.
+/// `State` is constructed via [`Tx::setup`] or [`Config::setup`], which also return a middleware
+/// [`Layer`]. The state and the middleware together enable the [`Tx`] extractor to work.
 #[derive(Debug)]
 pub struct State<DB: sqlx::Database> {
     pool: sqlx::Pool<DB>,
@@ -212,35 +164,69 @@ impl<DB: sqlx::Database> Clone for State<DB> {
 
 /// Possible errors when extracting [`Tx`] from a request.
 ///
-/// `axum` requires that the `FromRequest` `Rejection` implements `IntoResponse`, which this does
-/// by returning the `Display` representation of the variant. Note that this means returning
-/// configuration and database errors to clients, but you can override the type of error that
-/// `Tx::from_request` returns using the `E` generic parameter:
+/// Errors can occur at two points during the request lifecycle:
+///
+/// 1. The [`Tx`] extractor might fail to obtain a connection from the pool and `BEGIN` a
+///    transaction. This could be due to:
+///
+///    - Forgetting to add the middleware: [`Error::MissingExtension`].
+///    - Calling the extractor multiple times in the same request: [`Error::OverlappingExtractors`].
+///    - A problem communicating with the database: [`Error::Database`].
+///
+/// 2. The middleware [`Layer`] might fail to commit the transaction. This could be due to a problem
+///    communicating with the database, or else a logic error (e.g. unsatisfied deferred
+///    constraint): [`Error::Database`].
+///
+/// `axum` requires that errors can be turned into responses. The [`Error`] type converts into a
+/// HTTP 500 response with the error message as the response body. This may be suitable for
+/// development or internal services but it's generally not advisable to return internal error
+/// details to clients.
+///
+/// You can override the error types for both the [`Tx`] extractor and [`Layer`]:
+///
+/// - Override the [`Tx`]`<DB, E>` error type using the `E` generic type parameter.
+/// - Override the [`Layer`] error type using [`Config::layer_error`].
+///
+/// In both cases, the error type must implement `From<`[`Error`]`>` and
+/// `axum::response::IntoResponse`.
 ///
 /// ```
-/// use axum::response::IntoResponse;
-/// use axum_sqlx_tx::Tx;
-/// use sqlx::Sqlite;
+/// use axum::{response::IntoResponse, routing::post};
 ///
 /// struct MyError(axum_sqlx_tx::Error);
 ///
-/// // The error type must implement From<axum_sqlx_tx::Error>
 /// impl From<axum_sqlx_tx::Error> for MyError {
 ///     fn from(error: axum_sqlx_tx::Error) -> Self {
 ///         Self(error)
 ///     }
 /// }
 ///
-/// // The error type must implement IntoResponse
 /// impl IntoResponse for MyError {
 ///     fn into_response(self) -> axum::response::Response {
+///         // note that you would probably want to log the error as well
 ///         (http::StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
 ///     }
 /// }
 ///
-/// async fn handler(tx: Tx<Sqlite, MyError>) {
-///     /* ... */
-/// }
+/// // Override the `Tx` error type using the second generic type parameter
+/// type Tx = axum_sqlx_tx::Tx<sqlx::Sqlite, MyError>;
+///
+/// # async fn foo() {
+/// let pool = sqlx::SqlitePool::connect("...").await.unwrap();
+///
+/// let (state, layer) = Tx::config(pool)
+///     // Override the `Layer` error type using the `Config` API
+///     .layer_error::<MyError>()
+///     .setup();
+/// # let app = axum::Router::new()
+/// #    .route("/", post(create_user))
+/// #    .layer(layer)
+/// #    .with_state(state);
+/// # axum::Server::bind(todo!()).serve(app.into_make_service());
+/// # }
+/// # async fn create_user(mut tx: Tx, /* ... */) {
+/// #     /* ... */
+/// # }
 /// ```
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -252,7 +238,7 @@ pub enum Error {
     #[error("axum_sqlx_tx::Tx extractor used multiple times in the same handler/middleware")]
     OverlappingExtractors,
 
-    /// A database error occurred when starting the transaction.
+    /// A database error occurred when starting or committing the transaction.
     #[error(transparent)]
     Database {
         #[from]

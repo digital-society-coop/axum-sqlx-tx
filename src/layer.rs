@@ -25,35 +25,12 @@ pub struct Layer<DB: sqlx::Database, E = Error> {
     _error: PhantomData<E>,
 }
 
-impl<DB: sqlx::Database> Layer<DB> {
-    /// Construct a new layer and [`State`] with the given `pool`.
-    ///
-    /// A connection will be obtained from the pool the first time a [`Tx`](crate::Tx) is extracted
-    /// from a request.
-    ///
-    /// If you want to access the pool outside of a transaction, you should add it also with
-    /// [`axum::Extension`] or as router state.
-    ///
-    /// To use a different type than [`Error`] to convert commit errors into responses, see
-    /// [`new_with_error`](Self::new_with_error).
-    ///
-    /// [`axum::Extension`]: https://docs.rs/axum/latest/axum/extract/struct.Extension.html
-    pub fn new(pool: sqlx::Pool<DB>) -> (Self, State<DB>) {
-        Self::new_with_error(pool)
-    }
-
-    /// Construct a new layer with a specific error type.
-    ///
-    /// See [`Layer::new`] for more information.
-    pub fn new_with_error<E>(pool: sqlx::Pool<DB>) -> (Layer<DB, E>, State<DB>) {
-        let state = State::new(pool);
-        (
-            Layer {
-                state: state.clone(),
-                _error: PhantomData,
-            },
+impl<DB: sqlx::Database, E> Layer<DB, E> {
+    pub(crate) fn new(state: State<DB>) -> Self {
+        Self {
             state,
-        )
+            _error: PhantomData,
+        }
     }
 }
 
@@ -143,15 +120,17 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::{Error, State};
+
     use super::Layer;
 
     // The trait shenanigans required by axum for layers are significant, so this "test" ensures
     // we've got it right.
     #[allow(unused, unreachable_code, clippy::diverging_sub_expression)]
     fn layer_compiles() {
-        let pool: sqlx::Pool<sqlx::Sqlite> = todo!();
+        let state: State<sqlx::Sqlite> = todo!();
 
-        let (layer, _state) = Layer::new(pool);
+        let layer = Layer::<_, Error>::new(state);
 
         let app = axum::Router::new()
             .route("/", axum::routing::get(|| async { "hello" }))
