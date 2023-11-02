@@ -74,7 +74,10 @@ use crate::{
 /// }
 /// ```
 #[derive(Debug)]
-pub struct Tx<DB: sqlx::Database, E = Error>(Lease<sqlx::Transaction<'static, DB>>, PhantomData<E>);
+pub struct Tx<DB: sqlx::Database, E = Error> {
+    tx: Lease<sqlx::Transaction<'static, DB>>,
+    _error: PhantomData<E>,
+}
 
 impl<DB: sqlx::Database, E> Tx<DB, E> {
     /// Crate a [`State`] and [`Layer`](crate::Layer) to enable the extractor.
@@ -120,19 +123,19 @@ impl<DB: sqlx::Database, E> Tx<DB, E> {
     /// **Note:** trying to use the `Tx` extractor again after calling `commit` will currently
     /// generate [`Error::OverlappingExtractors`] errors. This may change in future.
     pub async fn commit(self) -> Result<(), sqlx::Error> {
-        self.0.steal().commit().await
+        self.tx.steal().commit().await
     }
 }
 
 impl<DB: sqlx::Database, E> AsRef<sqlx::Transaction<'static, DB>> for Tx<DB, E> {
     fn as_ref(&self) -> &sqlx::Transaction<'static, DB> {
-        &self.0
+        &self.tx
     }
 }
 
 impl<DB: sqlx::Database, E> AsMut<sqlx::Transaction<'static, DB>> for Tx<DB, E> {
     fn as_mut(&mut self) -> &mut sqlx::Transaction<'static, DB> {
-        &mut self.0
+        &mut self.tx
     }
 }
 
@@ -140,13 +143,13 @@ impl<DB: sqlx::Database, E> std::ops::Deref for Tx<DB, E> {
     type Target = sqlx::Transaction<'static, DB>;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.tx
     }
 }
 
 impl<DB: sqlx::Database, E> std::ops::DerefMut for Tx<DB, E> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+        &mut self.tx
     }
 }
 
@@ -171,7 +174,10 @@ where
 
             let tx = ext.get_or_begin().await?;
 
-            Ok(Self(tx, PhantomData))
+            Ok(Self {
+                tx,
+                _error: PhantomData,
+            })
         })
     }
 }
