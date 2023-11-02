@@ -105,7 +105,11 @@ pub struct Config<DB: sqlx::Database, LayerError> {
     _layer_error: PhantomData<LayerError>,
 }
 
-impl<DB: sqlx::Database, LayerError> Config<DB, LayerError> {
+impl<DB: sqlx::Database, LayerError> Config<DB, LayerError>
+where
+    LayerError: axum_core::response::IntoResponse,
+    sqlx::Error: Into<LayerError>,
+{
     fn new(pool: sqlx::Pool<DB>) -> Self {
         Self {
             pool,
@@ -116,7 +120,7 @@ impl<DB: sqlx::Database, LayerError> Config<DB, LayerError> {
     /// Change the layer error type.
     pub fn layer_error<E>(self) -> Config<DB, E>
     where
-        Error: Into<E>,
+        sqlx::Error: Into<E>,
     {
         Config {
             pool: self.pool,
@@ -184,20 +188,31 @@ impl<DB: sqlx::Database> Clone for State<DB> {
 ///
 /// You can override the error types for both the [`Tx`] extractor and [`Layer`]:
 ///
-/// - Override the [`Tx`]`<DB, E>` error type using the `E` generic type parameter.
-/// - Override the [`Layer`] error type using [`Config::layer_error`].
+/// - Override the [`Tx`]`<DB, E>` error type using the `E` generic type parameter. `E` must be
+///   convertible from [`Error`] (e.g. [`Error`]`: Into<E>`).
 ///
-/// In both cases, the error type must implement `From<`[`Error`]`>` and
-/// `axum::response::IntoResponse`.
+/// - Override the [`Layer`] error type using [`Config::layer_error`]. The layer error type must be
+///   convertible from `sqlx::Error` (e.g. `sqlx::Error: Into<LayerError>`).
+///
+/// In both cases, the error type must implement `axum::response::IntoResponse`.
 ///
 /// ```
 /// use axum::{response::IntoResponse, routing::post};
 ///
-/// struct MyError(axum_sqlx_tx::Error);
+/// enum MyError{
+///     Extractor(axum_sqlx_tx::Error),
+///     Layer(sqlx::Error),
+/// }
 ///
 /// impl From<axum_sqlx_tx::Error> for MyError {
 ///     fn from(error: axum_sqlx_tx::Error) -> Self {
-///         Self(error)
+///         Self::Extractor(error)
+///     }
+/// }
+///
+/// impl From<sqlx::Error> for MyError {
+///     fn from(error: sqlx::Error) -> Self {
+///         Self::Layer(error)
 ///     }
 /// }
 ///

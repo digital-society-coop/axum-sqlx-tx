@@ -7,7 +7,7 @@ use bytes::Bytes;
 use futures_core::future::BoxFuture;
 use http_body::{combinators::UnsyncBoxBody, Body};
 
-use crate::{tx::TxSlot, Error, State};
+use crate::{tx::TxSlot, State};
 
 /// A [`tower_layer::Layer`] that enables the [`Tx`] extractor.
 ///
@@ -20,12 +20,16 @@ use crate::{tx::TxSlot, Error, State};
 ///
 /// [`Tx`]: crate::Tx
 /// [request extensions]: https://docs.rs/http/latest/http/struct.Extensions.html
-pub struct Layer<DB: sqlx::Database, E = Error> {
+pub struct Layer<DB: sqlx::Database, E> {
     state: State<DB>,
     _error: PhantomData<E>,
 }
 
-impl<DB: sqlx::Database, E> Layer<DB, E> {
+impl<DB: sqlx::Database, E> Layer<DB, E>
+where
+    E: IntoResponse,
+    sqlx::Error: Into<E>,
+{
     pub(crate) fn new(state: State<DB>) -> Self {
         Self {
             state,
@@ -43,7 +47,11 @@ impl<DB: sqlx::Database, E> Clone for Layer<DB, E> {
     }
 }
 
-impl<DB: sqlx::Database, S, E> tower_layer::Layer<S> for Layer<DB, E> {
+impl<DB: sqlx::Database, S, E> tower_layer::Layer<S> for Layer<DB, E>
+where
+    E: IntoResponse,
+    sqlx::Error: Into<E>,
+{
     type Service = Service<DB, S, E>;
 
     fn layer(&self, inner: S) -> Self::Service {
@@ -58,7 +66,7 @@ impl<DB: sqlx::Database, S, E> tower_layer::Layer<S> for Layer<DB, E> {
 /// A [`tower_service::Service`] that enables the [`Tx`](crate::Tx) extractor.
 ///
 /// See [`Layer`] for more information.
-pub struct Service<DB: sqlx::Database, S, E = Error> {
+pub struct Service<DB: sqlx::Database, S, E> {
     state: State<DB>,
     inner: S,
     _error: PhantomData<E>,
@@ -84,7 +92,8 @@ where
         Error = std::convert::Infallible,
     >,
     S::Future: Send + 'static,
-    E: From<Error> + IntoResponse,
+    E: IntoResponse,
+    sqlx::Error: Into<E>,
     ResBody: Body<Data = Bytes> + Send + 'static,
     ResBody::Error: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
 {
@@ -109,7 +118,7 @@ where
 
             if !res.status().is_server_error() && !res.status().is_client_error() {
                 if let Err(error) = transaction.commit().await {
-                    return Ok(E::from(Error::Database { error }).into_response());
+                    return Ok(error.into().into_response());
                 }
             }
 

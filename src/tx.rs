@@ -88,7 +88,7 @@ impl<DB: sqlx::Database, E> Tx<DB, E> {
     /// let (state, layer) = Tx::setup(pool);
     /// # }
     /// ```
-    pub fn setup(pool: sqlx::Pool<DB>) -> (State<DB>, crate::Layer<DB>) {
+    pub fn setup(pool: sqlx::Pool<DB>) -> (State<DB>, crate::Layer<DB, Error>) {
         Config::new(pool).setup()
     }
 

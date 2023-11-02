@@ -213,7 +213,7 @@ async fn overlapping_extractors() {
 #[tokio::test]
 async fn extractor_error_override() {
     let (_, _, response) =
-        build_app(|_: Tx, _: axum_sqlx_tx::Tx<sqlx::Sqlite, MyError>| async move {}).await;
+        build_app(|_: Tx, _: axum_sqlx_tx::Tx<sqlx::Sqlite, MyExtractorError>| async move {}).await;
 
     assert!(response.status.is_client_error());
     assert_eq!(response.body, "internal server error");
@@ -242,7 +242,7 @@ async fn layer_error_override() {
     .await
     .unwrap();
 
-    let (state, layer) = Tx::config(pool).layer_error::<MyError>().setup();
+    let (state, layer) = Tx::config(pool).layer_error::<MyLayerError>().setup();
 
     let app = axum::Router::new()
         .route(
@@ -335,15 +335,29 @@ where
     (db, pool, Response { status, body })
 }
 
-struct MyError(axum_sqlx_tx::Error);
+struct MyExtractorError(axum_sqlx_tx::Error);
 
-impl From<axum_sqlx_tx::Error> for MyError {
+impl From<axum_sqlx_tx::Error> for MyExtractorError {
     fn from(error: axum_sqlx_tx::Error) -> Self {
         Self(error)
     }
 }
 
-impl IntoResponse for MyError {
+impl IntoResponse for MyExtractorError {
+    fn into_response(self) -> axum::response::Response {
+        (http::StatusCode::IM_A_TEAPOT, "internal server error").into_response()
+    }
+}
+
+struct MyLayerError(sqlx::Error);
+
+impl From<sqlx::Error> for MyLayerError {
+    fn from(error: sqlx::Error) -> Self {
+        Self(error)
+    }
+}
+
+impl IntoResponse for MyLayerError {
     fn into_response(self) -> axum::response::Response {
         (http::StatusCode::IM_A_TEAPOT, "internal server error").into_response()
     }
