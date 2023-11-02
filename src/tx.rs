@@ -11,7 +11,7 @@ use sqlx::Transaction;
 
 use crate::{
     slot::{Lease, Slot},
-    Error, State,
+    Config, Error, State,
 };
 
 /// An `axum` extractor for a database transaction.
@@ -76,6 +76,40 @@ use crate::{
 pub struct Tx<DB: sqlx::Database, E = Error>(Lease<sqlx::Transaction<'static, DB>>, PhantomData<E>);
 
 impl<DB: sqlx::Database, E> Tx<DB, E> {
+    /// Crate a [`State`] and [`Layer`](crate::Layer) to enable the extractor.
+    ///
+    /// This is convenient to use from a type alias, e.g.
+    ///
+    /// ```
+    /// # async fn foo() {
+    /// type Tx = axum_sqlx_tx::Tx<sqlx::Sqlite>;
+    ///
+    /// let pool: sqlx::SqlitePool = todo!();
+    /// let (state, layer) = Tx::setup(pool);
+    /// # }
+    /// ```
+    pub fn setup(pool: sqlx::Pool<DB>) -> (State<DB>, crate::Layer<DB>) {
+        Config::new(pool).setup()
+    }
+
+    /// Configure extractor behaviour.
+    ///
+    /// See the [`Config`] API for available options.
+    ///
+    /// This is convenient to use from a type alias, e.g.
+    ///
+    /// ```
+    /// # async fn foo() {
+    /// type Tx = axum_sqlx_tx::Tx<sqlx::Sqlite>;
+    ///
+    /// # let pool: sqlx::SqlitePool = todo!();
+    /// let config = Tx::config(pool);
+    /// # }
+    /// ```
+    pub fn config(pool: sqlx::Pool<DB>) -> Config<DB, Error> {
+        Config::new(pool)
+    }
+
     /// Explicitly commit the transaction.
     ///
     /// By default, the transaction will be committed when a successful response is returned
