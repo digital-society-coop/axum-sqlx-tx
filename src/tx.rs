@@ -113,8 +113,8 @@ impl<DB: sqlx::Database, E> Tx<DB, E> {
     /// Explicitly commit the transaction.
     ///
     /// By default, the transaction will be committed when a successful response is returned
-    /// (specifically, when the [`Service`](crate::Service) middleware intercepts an HTTP `2XX`
-    /// response). This method allows the transaction to be committed explicitly.
+    /// (specifically, when the [`Service`](crate::Service) middleware intercepts an HTTP `2XX` or
+    /// `3XX` response). This method allows the transaction to be committed explicitly.
     ///
     /// **Note:** trying to use the `Tx` extractor again after calling `commit` will currently
     /// generate [`Error::OverlappingExtractors`] errors. This may change in future.
