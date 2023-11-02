@@ -1,14 +1,13 @@
 use axum::{middleware, response::IntoResponse};
 use axum_sqlx_tx::State;
 use sqlx::{sqlite::SqliteArguments, Arguments as _};
-use tempfile::NamedTempFile;
 use tower::ServiceExt;
 
 type Tx = axum_sqlx_tx::Tx<sqlx::Sqlite>;
 
 #[tokio::test]
 async fn commit_on_success() {
-    let (_db, pool, response) = build_app(|mut tx: Tx| async move {
+    let (pool, response) = build_app(|mut tx: Tx| async move {
         let (_, name) = insert_user(&mut tx, 1, "huge hackerman").await;
         format!("hello {name}")
     })
@@ -26,7 +25,7 @@ async fn commit_on_success() {
 
 #[tokio::test]
 async fn commit_on_redirection() {
-    let (_db, pool, response) = build_app(|mut tx: Tx| async move {
+    let (pool, response) = build_app(|mut tx: Tx| async move {
         let (_, _) = insert_user(&mut tx, 1, "john redirect").await;
         http::StatusCode::SEE_OTHER
     })
@@ -43,7 +42,7 @@ async fn commit_on_redirection() {
 
 #[tokio::test]
 async fn rollback_on_error() {
-    let (_db, pool, response) = build_app(|mut tx: Tx| async move {
+    let (pool, response) = build_app(|mut tx: Tx| async move {
         insert_user(&mut tx, 1, "michael oxmaul").await;
         http::StatusCode::BAD_REQUEST
     })
@@ -57,7 +56,7 @@ async fn rollback_on_error() {
 
 #[tokio::test]
 async fn explicit_commit() {
-    let (_db, pool, response) = build_app(|mut tx: Tx| async move {
+    let (pool, response) = build_app(|mut tx: Tx| async move {
         insert_user(&mut tx, 1, "michael oxmaul").await;
         tx.commit().await.unwrap();
         http::StatusCode::BAD_REQUEST
@@ -75,10 +74,7 @@ async fn explicit_commit() {
 
 #[tokio::test]
 async fn extract_from_middleware_and_handler() {
-    let db = NamedTempFile::new().unwrap();
-    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", db.path().display()))
-        .await
-        .unwrap();
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
 
     sqlx::query("CREATE TABLE IF NOT EXISTS users (id INT PRIMARY KEY, name TEXT);")
         .execute(&pool)
@@ -146,10 +142,7 @@ async fn substates() {
         }
     }
 
-    let db = NamedTempFile::new().unwrap();
-    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", db.path().display()))
-        .await
-        .unwrap();
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
 
     let (state, layer) = Tx::setup(pool);
 
@@ -172,10 +165,7 @@ async fn substates() {
 
 #[tokio::test]
 async fn missing_layer() {
-    let db = NamedTempFile::new().unwrap();
-    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", db.path().display()))
-        .await
-        .unwrap();
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
 
     // Note that we have to explicitly ignore the `_layer`, making it hard to do this accidentally.
     let (state, _layer) = Tx::setup(pool);
@@ -201,7 +191,7 @@ async fn missing_layer() {
 
 #[tokio::test]
 async fn overlapping_extractors() {
-    let (_, _, response) = build_app(|_: Tx, _: Tx| async move {}).await;
+    let (_, response) = build_app(|_: Tx, _: Tx| async move {}).await;
 
     assert!(response.status.is_server_error());
     assert_eq!(
@@ -212,7 +202,7 @@ async fn overlapping_extractors() {
 
 #[tokio::test]
 async fn extractor_error_override() {
-    let (_, _, response) =
+    let (_, response) =
         build_app(|_: Tx, _: axum_sqlx_tx::Tx<sqlx::Sqlite, MyExtractorError>| async move {}).await;
 
     assert!(response.status.is_client_error());
@@ -221,10 +211,7 @@ async fn extractor_error_override() {
 
 #[tokio::test]
 async fn layer_error_override() {
-    let db = NamedTempFile::new().unwrap();
-    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", db.path().display()))
-        .await
-        .unwrap();
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
 
     sqlx::query("CREATE TABLE IF NOT EXISTS users (id INT PRIMARY KEY);")
         .execute(&pool)
@@ -298,15 +285,12 @@ struct Response {
     body: axum::body::Bytes,
 }
 
-async fn build_app<H, T>(handler: H) -> (NamedTempFile, sqlx::SqlitePool, Response)
+async fn build_app<H, T>(handler: H) -> (sqlx::SqlitePool, Response)
 where
     H: axum::handler::Handler<T, State<sqlx::Sqlite>, axum::body::Body>,
     T: 'static,
 {
-    let db = NamedTempFile::new().unwrap();
-    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", db.path().display()))
-        .await
-        .unwrap();
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
 
     sqlx::query("CREATE TABLE IF NOT EXISTS users (id INT PRIMARY KEY, name TEXT);")
         .execute(&pool)
@@ -332,7 +316,7 @@ where
     let status = response.status();
     let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
 
-    (db, pool, Response { status, body })
+    (pool, Response { status, body })
 }
 
 struct MyExtractorError(axum_sqlx_tx::Error);
