@@ -67,6 +67,14 @@
 //!
 //! See [`Error`] for how to customise error handling.
 //!
+//! ## Multiple databases
+//!
+//! If you need to work with multiple databases, you can define marker structs for each. See
+//! [`Marker`] for an example.
+//!
+//! It's not currently possible to use `Tx` for a dynamic number of databases. Feel free to open an
+//! issue if you have a requirement for this.
+//!
 //! # Examples
 //!
 //! See [`examples/`][examples] in the repo for more examples.
@@ -78,6 +86,7 @@
 mod config;
 mod error;
 mod layer;
+mod marker;
 mod slot;
 mod state;
 mod tx;
@@ -86,6 +95,7 @@ pub use crate::{
     config::Config,
     error::Error,
     layer::{Layer, Service},
+    marker::Marker,
     state::State,
     tx::Tx,
 };

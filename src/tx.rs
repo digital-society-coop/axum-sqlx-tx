@@ -12,7 +12,7 @@ use sqlx::Transaction;
 
 use crate::{
     slot::{Lease, Slot},
-    Config, Error, State,
+    Config, Error, Marker, State,
 };
 
 /// An `axum` extractor for a database transaction.
@@ -74,12 +74,12 @@ use crate::{
 /// }
 /// ```
 #[derive(Debug)]
-pub struct Tx<DB: sqlx::Database, E = Error> {
-    tx: Lease<sqlx::Transaction<'static, DB>>,
+pub struct Tx<DB: Marker, E = Error> {
+    tx: Lease<sqlx::Transaction<'static, DB::Driver>>,
     _error: PhantomData<E>,
 }
 
-impl<DB: sqlx::Database, E> Tx<DB, E> {
+impl<DB: Marker, E> Tx<DB, E> {
     /// Crate a [`State`] and [`Layer`](crate::Layer) to enable the extractor.
     ///
     /// This is convenient to use from a type alias, e.g.
@@ -92,7 +92,7 @@ impl<DB: sqlx::Database, E> Tx<DB, E> {
     /// let (state, layer) = Tx::setup(pool);
     /// # }
     /// ```
-    pub fn setup(pool: sqlx::Pool<DB>) -> (State<DB>, crate::Layer<DB, Error>) {
+    pub fn setup(pool: sqlx::Pool<DB::Driver>) -> (State<DB>, crate::Layer<DB, Error>) {
         Config::new(pool).setup()
     }
 
@@ -110,7 +110,7 @@ impl<DB: sqlx::Database, E> Tx<DB, E> {
     /// let config = Tx::config(pool);
     /// # }
     /// ```
-    pub fn config(pool: sqlx::Pool<DB>) -> Config<DB, Error> {
+    pub fn config(pool: sqlx::Pool<DB::Driver>) -> Config<DB, Error> {
         Config::new(pool)
     }
 
@@ -127,33 +127,33 @@ impl<DB: sqlx::Database, E> Tx<DB, E> {
     }
 }
 
-impl<DB: sqlx::Database, E> AsRef<sqlx::Transaction<'static, DB>> for Tx<DB, E> {
-    fn as_ref(&self) -> &sqlx::Transaction<'static, DB> {
+impl<DB: Marker, E> AsRef<sqlx::Transaction<'static, DB::Driver>> for Tx<DB, E> {
+    fn as_ref(&self) -> &sqlx::Transaction<'static, DB::Driver> {
         &self.tx
     }
 }
 
-impl<DB: sqlx::Database, E> AsMut<sqlx::Transaction<'static, DB>> for Tx<DB, E> {
-    fn as_mut(&mut self) -> &mut sqlx::Transaction<'static, DB> {
+impl<DB: Marker, E> AsMut<sqlx::Transaction<'static, DB::Driver>> for Tx<DB, E> {
+    fn as_mut(&mut self) -> &mut sqlx::Transaction<'static, DB::Driver> {
         &mut self.tx
     }
 }
 
-impl<DB: sqlx::Database, E> std::ops::Deref for Tx<DB, E> {
-    type Target = sqlx::Transaction<'static, DB>;
+impl<DB: Marker, E> std::ops::Deref for Tx<DB, E> {
+    type Target = sqlx::Transaction<'static, DB::Driver>;
 
     fn deref(&self) -> &Self::Target {
         &self.tx
     }
 }
 
-impl<DB: sqlx::Database, E> std::ops::DerefMut for Tx<DB, E> {
+impl<DB: Marker, E> std::ops::DerefMut for Tx<DB, E> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.tx
     }
 }
 
-impl<DB: sqlx::Database, S, E> FromRequestParts<S> for Tx<DB, E>
+impl<DB: Marker, S, E> FromRequestParts<S> for Tx<DB, E>
 where
     E: From<Error> + IntoResponse,
     State<DB>: FromRef<S>,
@@ -183,9 +183,9 @@ where
 }
 
 /// The OG `Slot` – the transaction (if any) returns here when the `Extension` is dropped.
-pub(crate) struct TxSlot<DB: sqlx::Database>(Slot<Option<Slot<Transaction<'static, DB>>>>);
+pub(crate) struct TxSlot<DB: Marker>(Slot<Option<Slot<Transaction<'static, DB::Driver>>>>);
 
-impl<DB: sqlx::Database> TxSlot<DB> {
+impl<DB: Marker> TxSlot<DB> {
     /// Create a `TxSlot` bound to the given request extensions.
     ///
     /// When the request extensions are dropped, `commit` can be called to commit the transaction
@@ -208,13 +208,13 @@ impl<DB: sqlx::Database> TxSlot<DB> {
 ///
 /// When the transaction is started, it's inserted into the `Option` leased from the `TxSlot`, so
 /// that when `Lazy` is dropped the transaction is moved to the `TxSlot`.
-struct Lazy<DB: sqlx::Database> {
+struct Lazy<DB: Marker> {
     state: State<DB>,
-    tx: Lease<Option<Slot<Transaction<'static, DB>>>>,
+    tx: Lease<Option<Slot<Transaction<'static, DB::Driver>>>>,
 }
 
-impl<DB: sqlx::Database> Lazy<DB> {
-    async fn get_or_begin(&mut self) -> Result<Lease<Transaction<'static, DB>>, Error> {
+impl<DB: Marker> Lazy<DB> {
+    async fn get_or_begin(&mut self) -> Result<Lease<Transaction<'static, DB::Driver>>, Error> {
         let tx = if let Some(tx) = self.tx.as_mut() {
             tx
         } else {
@@ -228,11 +228,12 @@ impl<DB: sqlx::Database> Lazy<DB> {
 
 impl<'c, DB, E> sqlx::Executor<'c> for &'c mut Tx<DB, E>
 where
-    DB: sqlx::Database,
-    for<'t> &'t mut DB::Connection: sqlx::Executor<'t, Database = DB>,
+    DB: Marker,
+    for<'t> &'t mut <DB::Driver as sqlx::Database>::Connection:
+        sqlx::Executor<'t, Database = DB::Driver>,
     E: std::fmt::Debug + Send,
 {
-    type Database = DB;
+    type Database = DB::Driver;
 
     #[allow(clippy::type_complexity)]
     fn fetch_many<'e, 'q: 'e, Q: 'q>(

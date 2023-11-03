@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use crate::{Layer, State};
+use crate::{Layer, Marker, State};
 
 /// Configuration for [`Tx`](crate::Tx) extractors.
 ///
@@ -16,17 +16,17 @@ use crate::{Layer, State};
 /// let config = Tx::config(pool);
 /// # }
 /// ```
-pub struct Config<DB: sqlx::Database, LayerError> {
-    pool: sqlx::Pool<DB>,
+pub struct Config<DB: Marker, LayerError> {
+    pool: sqlx::Pool<DB::Driver>,
     _layer_error: PhantomData<LayerError>,
 }
 
-impl<DB: sqlx::Database, LayerError> Config<DB, LayerError>
+impl<DB: Marker, LayerError> Config<DB, LayerError>
 where
     LayerError: axum_core::response::IntoResponse,
     sqlx::Error: Into<LayerError>,
 {
-    pub(crate) fn new(pool: sqlx::Pool<DB>) -> Self {
+    pub(crate) fn new(pool: sqlx::Pool<DB::Driver>) -> Self {
         Self {
             pool,
             _layer_error: PhantomData,
