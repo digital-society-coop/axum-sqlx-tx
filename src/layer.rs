@@ -7,7 +7,7 @@ use bytes::Bytes;
 use futures_core::future::BoxFuture;
 use http_body::{combinators::UnsyncBoxBody, Body};
 
-use crate::{tx::TxSlot, State};
+use crate::{tx::TxSlot, Marker, State};
 
 /// A [`tower_layer::Layer`] that enables the [`Tx`] extractor.
 ///
@@ -20,12 +20,12 @@ use crate::{tx::TxSlot, State};
 ///
 /// [`Tx`]: crate::Tx
 /// [request extensions]: https://docs.rs/http/latest/http/struct.Extensions.html
-pub struct Layer<DB: sqlx::Database, E> {
+pub struct Layer<DB: Marker, E> {
     state: State<DB>,
     _error: PhantomData<E>,
 }
 
-impl<DB: sqlx::Database, E> Layer<DB, E>
+impl<DB: Marker, E> Layer<DB, E>
 where
     E: IntoResponse,
     sqlx::Error: Into<E>,
@@ -38,7 +38,7 @@ where
     }
 }
 
-impl<DB: sqlx::Database, E> Clone for Layer<DB, E> {
+impl<DB: Marker, E> Clone for Layer<DB, E> {
     fn clone(&self) -> Self {
         Self {
             state: self.state.clone(),
@@ -47,7 +47,7 @@ impl<DB: sqlx::Database, E> Clone for Layer<DB, E> {
     }
 }
 
-impl<DB: sqlx::Database, S, E> tower_layer::Layer<S> for Layer<DB, E>
+impl<DB: Marker, S, E> tower_layer::Layer<S> for Layer<DB, E>
 where
     E: IntoResponse,
     sqlx::Error: Into<E>,
@@ -66,14 +66,14 @@ where
 /// A [`tower_service::Service`] that enables the [`Tx`](crate::Tx) extractor.
 ///
 /// See [`Layer`] for more information.
-pub struct Service<DB: sqlx::Database, S, E> {
+pub struct Service<DB: Marker, S, E> {
     state: State<DB>,
     inner: S,
     _error: PhantomData<E>,
 }
 
 // can't simply derive because `DB` isn't `Clone`
-impl<DB: sqlx::Database, S: Clone, E> Clone for Service<DB, S, E> {
+impl<DB: Marker, S: Clone, E> Clone for Service<DB, S, E> {
     fn clone(&self) -> Self {
         Self {
             state: self.state.clone(),
@@ -83,7 +83,7 @@ impl<DB: sqlx::Database, S: Clone, E> Clone for Service<DB, S, E> {
     }
 }
 
-impl<DB: sqlx::Database, S, E, ReqBody, ResBody> tower_service::Service<http::Request<ReqBody>>
+impl<DB: Marker, S, E, ReqBody, ResBody> tower_service::Service<http::Request<ReqBody>>
     for Service<DB, S, E>
 where
     S: tower_service::Service<
