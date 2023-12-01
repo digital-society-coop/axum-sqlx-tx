@@ -35,7 +35,7 @@
 //! #   .route("/", axum::routing::get(|tx: Tx| async move {}))
 //!     .layer(layer)
 //!     .with_state(state);
-//! # axum::Server::bind(todo!()).serve(app.into_make_service());
+//! # axum::serve(todo!(), app);
 //! # }
 //! ```
 //!

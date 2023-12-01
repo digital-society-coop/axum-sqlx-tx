@@ -1,5 +1,6 @@
 use axum::{middleware, response::IntoResponse};
 use axum_sqlx_tx::State;
+use http_body_util::BodyExt;
 use sqlx::{sqlite::SqliteArguments, Arguments as _};
 use tower::ServiceExt;
 
@@ -81,10 +82,10 @@ async fn extract_from_middleware_and_handler() {
         .await
         .unwrap();
 
-    async fn test_middleware<B>(
+    async fn test_middleware(
         mut tx: Tx,
-        req: http::Request<B>,
-        next: middleware::Next<B>,
+        req: http::Request<axum::body::Body>,
+        next: middleware::Next,
     ) -> impl IntoResponse {
         insert_user(&mut tx, 1, "bobby tables").await;
 
@@ -123,7 +124,7 @@ async fn extract_from_middleware_and_handler() {
         .await
         .unwrap();
     let status = response.status();
-    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
 
     assert!(status.is_success());
     assert_eq!(body.as_ref(), b"[[1,\"bobby tables\"]]");
@@ -185,7 +186,7 @@ async fn missing_layer() {
 
     assert!(response.status().is_server_error());
 
-    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(body, format!("{}", axum_sqlx_tx::Error::MissingExtension));
 }
 
@@ -254,7 +255,7 @@ async fn layer_error_override() {
         .await
         .unwrap();
     let status = response.status();
-    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
 
     assert!(status.is_client_error());
     assert_eq!(body, "internal server error");
@@ -374,7 +375,7 @@ struct Response {
 
 async fn build_app<H, T>(handler: H) -> (sqlx::SqlitePool, Response)
 where
-    H: axum::handler::Handler<T, State<sqlx::Sqlite>, axum::body::Body>,
+    H: axum::handler::Handler<T, State<sqlx::Sqlite>>,
     T: 'static,
 {
     let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
@@ -401,7 +402,7 @@ where
         .await
         .unwrap();
     let status = response.status();
-    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
 
     (pool, Response { status, body })
 }

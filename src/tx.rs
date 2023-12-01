@@ -1,6 +1,6 @@
 //! A request extension that enables the [`Tx`](crate::Tx) extractor.
 
-use std::marker::PhantomData;
+use std::{marker::PhantomData, sync::Arc};
 
 use axum_core::{
     extract::{FromRef, FromRequestParts},
@@ -170,9 +170,13 @@ where
         'state: 'ctx,
     {
         Box::pin(async move {
-            let ext: &mut Lazy<DB> = parts.extensions.get_mut().ok_or(Error::MissingExtension)?;
+            let ext: &mut Arc<Lazy<DB>> =
+                parts.extensions.get_mut().ok_or(Error::MissingExtension)?;
 
-            let tx = ext.get_or_begin().await?;
+            let tx = Arc::get_mut(ext)
+                .ok_or(Error::OverlappingExtractors)?
+                .get_or_begin()
+                .await?;
 
             Ok(Self {
                 tx,
@@ -192,7 +196,8 @@ impl<DB: Marker> TxSlot<DB> {
     /// (if any).
     pub(crate) fn bind(extensions: &mut http::Extensions, state: State<DB>) -> Self {
         let (slot, tx) = Slot::new_leased(None);
-        extensions.insert(Lazy { state, tx });
+        let lazy = Arc::new(Lazy { state, tx });
+        extensions.insert(lazy);
         Self(slot)
     }
 

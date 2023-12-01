@@ -70,7 +70,7 @@
 /// #    .route("/", post(create_user))
 /// #    .layer(layer)
 /// #    .with_state(state);
-/// # axum::Server::bind(todo!()).serve(app.into_make_service());
+/// # axum::serve(todo!(), app);
 /// # }
 /// # async fn create_user(mut tx: Tx, /* ... */) {
 /// #     /* ... */

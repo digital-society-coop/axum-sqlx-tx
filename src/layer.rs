@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use axum_core::response::IntoResponse;
 use bytes::Bytes;
 use futures_core::future::BoxFuture;
-use http_body::{combinators::UnsyncBoxBody, Body};
+use http_body::Body;
 
 use crate::{tx::TxSlot, Marker, State};
 
@@ -97,7 +97,7 @@ where
     ResBody: Body<Data = Bytes> + Send + 'static,
     ResBody::Error: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
 {
-    type Response = http::Response<UnsyncBoxBody<ResBody::Data, axum_core::Error>>;
+    type Response = http::Response<axum_core::body::Body>;
     type Error = S::Error;
     type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
@@ -122,7 +122,7 @@ where
                 }
             }
 
-            Ok(res.map(|body| body.map_err(axum_core::Error::new).boxed_unsync()))
+            Ok(res.map(axum_core::body::Body::new))
         })
     }
 }
@@ -145,6 +145,6 @@ mod tests {
             .route("/", axum::routing::get(|| async { "hello" }))
             .layer(layer);
 
-        axum::Server::bind(todo!()).serve(app.into_make_service());
+        axum::serve(todo!(), app);
     }
 }
