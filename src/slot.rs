@@ -58,8 +58,15 @@ impl<T> Slot<T> {
     }
 }
 
+impl<T> Clone for Slot<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+
 /// A lease of a value from a `Slot`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Lease<T>(lease::State<T>);
 
 impl<T> Lease<T> {
@@ -110,10 +117,10 @@ mod lease {
 
     use parking_lot::Mutex;
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub(super) struct State<T>(Inner<T>);
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     enum Inner<T> {
         Dropped,
         Stolen,

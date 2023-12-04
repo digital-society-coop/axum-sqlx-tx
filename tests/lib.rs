@@ -87,7 +87,9 @@ async fn missing_layer() {
 
     assert!(response.status().is_server_error());
 
-    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     assert_eq!(body, format!("{}", axum_sqlx_tx::Error::MissingExtension));
 }
 
@@ -155,7 +157,9 @@ async fn layer_error_override() {
         .await
         .unwrap();
     let status = response.status();
-    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
 
     assert!(status.is_client_error());
     assert_eq!(body, "internal server error");
@@ -188,7 +192,7 @@ struct Response {
 
 async fn build_app<H, T>(handler: H) -> (NamedTempFile, sqlx::SqlitePool, Response)
 where
-    H: axum::handler::Handler<T, (), axum::body::Body>,
+    H: axum::handler::Handler<T, ()>,
     T: 'static,
 {
     let db = NamedTempFile::new().unwrap();
@@ -215,7 +219,9 @@ where
         .await
         .unwrap();
     let status = response.status();
-    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
 
     (db, pool, Response { status, body })
 }

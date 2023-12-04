@@ -1,6 +1,7 @@
 //! A silly server that generates random numers, but only commits positive ones.
 
 use std::error::Error;
+use std::net::SocketAddr;
 
 use axum::{response::IntoResponse, routing::get, Json};
 use http::StatusCode;
@@ -25,9 +26,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         // Apply the Tx middleware
         .layer(axum_sqlx_tx::Layer::new(pool.clone()));
 
-    let server = axum::Server::bind(&([0, 0, 0, 0], 0).into()).serve(app.into_make_service());
+    let addr: SocketAddr = ([0, 0, 0, 0], 0).into();
+    let server = axum::serve(
+        tokio::net::TcpListener::bind(&addr).await.unwrap(),
+        app.into_make_service(),
+    );
 
-    println!("Listening on {}", server.local_addr());
+    println!("Listening on {}", addr);
     server.await?;
 
     Ok(())

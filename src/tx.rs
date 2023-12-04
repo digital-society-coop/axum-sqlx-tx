@@ -113,8 +113,8 @@ impl<DB: sqlx::Database, E> std::ops::DerefMut for Tx<DB, E> {
 }
 
 impl<DB: sqlx::Database, S, E> FromRequestParts<S> for Tx<DB, E>
-where
-    E: From<Error> + IntoResponse,
+    where
+        E: From<Error> + IntoResponse,
 {
     type Rejection = E;
 
@@ -122,10 +122,10 @@ where
         parts: &'req mut Parts,
         _state: &'state S,
     ) -> futures_core::future::BoxFuture<'ctx, Result<Self, Self::Rejection>>
-    where
-        Self: 'ctx,
-        'req: 'ctx,
-        'state: 'ctx,
+        where
+            Self: 'ctx,
+            'req: 'ctx,
+            'state: 'ctx,
     {
         Box::pin(async move {
             let ext: &mut Lazy<DB> = parts.extensions.get_mut().ok_or(Error::MissingExtension)?;
@@ -181,12 +181,21 @@ impl<DB: sqlx::Database> Lazy<DB> {
     }
 }
 
+impl<DB: sqlx::Database> Clone for Lazy<DB> {
+    fn clone(&self) -> Self {
+        Self {
+            pool: self.pool.clone(),
+            tx: self.tx.clone(),
+        }
+    }
+}
+
 #[cfg(any(
-    feature = "any",
-    feature = "mssql",
-    feature = "mysql",
-    feature = "postgres",
-    feature = "sqlite"
+feature = "any",
+feature = "mssql",
+feature = "mysql",
+feature = "postgres",
+feature = "sqlite"
 ))]
 mod sqlx_impls {
     use std::fmt::Debug;
