@@ -6,25 +6,28 @@ use std::net::SocketAddr;
 use axum::{response::IntoResponse, routing::get, Json};
 use http::StatusCode;
 
-// OPTIONAL: use a type alias to avoid repeating your database type
+// Recommended: use a type alias to avoid repeating your database type
 type Tx = axum_sqlx_tx::Tx<sqlx::Sqlite>;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     // You can use any sqlx::Pool
-    let db = tempfile::NamedTempFile::new()?;
-    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", db.path().display())).await?;
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await?;
 
     // Create a table (in a real application you might run migrations)
     sqlx::query("CREATE TABLE IF NOT EXISTS numbers (number INT PRIMARY KEY);")
         .execute(&pool)
         .await?;
 
+    let (state, layer) = Tx::setup(pool);
+
     // Standard axum app setup
     let app = axum::Router::new()
         .route("/numbers", get(list_numbers).post(generate_number))
         // Apply the Tx middleware
-        .layer(axum_sqlx_tx::Layer::new(pool.clone()));
+        .layer(layer)
+        // Add the Tx state
+        .with_state(state);
 
     let addr: SocketAddr = ([0, 0, 0, 0], 0).into();
     let server = axum::serve(

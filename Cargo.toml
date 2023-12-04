@@ -1,9 +1,9 @@
 [package]
 name = "axum-sqlx-tx"
 description = "Request-scoped SQLx transactions for axum"
-version = "0.5.0"
+version = "0.7.0"
 license = "MIT"
-repository = "https://github.com/wasdacraic/axum-sqlx-tx/"
+repository = "https://github.com/digital-society-coop/axum-sqlx-tx/"
 edition = "2021"
 include = [
   "LICENSE",
@@ -42,6 +42,5 @@ tower-service = "0.3"
 axum-sqlx-tx = { path = ".", features = ["runtime-tokio-rustls", "sqlite"] }
 axum = "0.7"
 hyper = "1"
-tempfile = "3.8"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tower = "0.4"

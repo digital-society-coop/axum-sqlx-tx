@@ -5,11 +5,9 @@ use std::marker::PhantomData;
 use axum_core::response::IntoResponse;
 use bytes::Bytes;
 use futures_core::future::BoxFuture;
-use http_body::Body;
-use http_body_util::combinators::UnsyncBoxBody;
-use http_body_util::BodyExt;
+use http_body::{combinators::UnsyncBoxBody, Body};
 
-use crate::{tx::TxSlot, Error};
+use crate::{tx::TxSlot, Marker, State};
 
 /// A [`tower_layer::Layer`] that enables the [`Tx`] extractor.
 ///
@@ -22,54 +20,43 @@ use crate::{tx::TxSlot, Error};
 ///
 /// [`Tx`]: crate::Tx
 /// [request extensions]: https://docs.rs/http/latest/http/struct.Extensions.html
-pub struct Layer<DB: sqlx::Database, E = Error> {
-    pool: sqlx::Pool<DB>,
+pub struct Layer<DB: Marker, E> {
+    state: State<DB>,
     _error: PhantomData<E>,
 }
 
-impl<DB: sqlx::Database> Layer<DB> {
-    /// Construct a new layer with the given `pool`.
-    ///
-    /// A connection will be obtained from the pool the first time a [`Tx`](crate::Tx) is extracted
-    /// from a request.
-    ///
-    /// If you want to access the pool outside of a transaction, you should add it also with
-    /// [`axum::Extension`].
-    ///
-    /// To use a different type than [`Error`] to convert commit errors into responses, see
-    /// [`new_with_error`](Self::new_with_error).
-    ///
-    /// [`axum::Extension`]: https://docs.rs/axum/latest/axum/extract/struct.Extension.html
-    pub fn new(pool: sqlx::Pool<DB>) -> Self {
-        Self::new_with_error(pool)
-    }
-
-    /// Construct a new layer with a specific error type.
-    ///
-    /// See [`Layer::new`] for more information.
-    pub fn new_with_error<E>(pool: sqlx::Pool<DB>) -> Layer<DB, E> {
-        Layer {
-            pool,
+impl<DB: Marker, E> Layer<DB, E>
+where
+    E: IntoResponse,
+    sqlx::Error: Into<E>,
+{
+    pub(crate) fn new(state: State<DB>) -> Self {
+        Self {
+            state,
             _error: PhantomData,
         }
     }
 }
 
-impl<DB: sqlx::Database, E> Clone for Layer<DB, E> {
+impl<DB: Marker, E> Clone for Layer<DB, E> {
     fn clone(&self) -> Self {
         Self {
-            pool: self.pool.clone(),
+            state: self.state.clone(),
             _error: self._error,
         }
     }
 }
 
-impl<DB: sqlx::Database, S, E> tower_layer::Layer<S> for Layer<DB, E> {
+impl<DB: Marker, S, E> tower_layer::Layer<S> for Layer<DB, E>
+where
+    E: IntoResponse,
+    sqlx::Error: Into<E>,
+{
     type Service = Service<DB, S, E>;
 
     fn layer(&self, inner: S) -> Self::Service {
         Service {
-            pool: self.pool.clone(),
+            state: self.state.clone(),
             inner,
             _error: self._error,
         }
@@ -79,24 +66,24 @@ impl<DB: sqlx::Database, S, E> tower_layer::Layer<S> for Layer<DB, E> {
 /// A [`tower_service::Service`] that enables the [`Tx`](crate::Tx) extractor.
 ///
 /// See [`Layer`] for more information.
-pub struct Service<DB: sqlx::Database, S, E = Error> {
-    pool: sqlx::Pool<DB>,
+pub struct Service<DB: Marker, S, E> {
+    state: State<DB>,
     inner: S,
     _error: PhantomData<E>,
 }
 
 // can't simply derive because `DB` isn't `Clone`
-impl<DB: sqlx::Database, S: Clone, E> Clone for Service<DB, S, E> {
+impl<DB: Marker, S: Clone, E> Clone for Service<DB, S, E> {
     fn clone(&self) -> Self {
         Self {
-            pool: self.pool.clone(),
+            state: self.state.clone(),
             inner: self.inner.clone(),
             _error: self._error,
         }
     }
 }
 
-impl<DB: sqlx::Database, S, E, ReqBody, ResBody> tower_service::Service<http::Request<ReqBody>>
+impl<DB: Marker, S, E, ReqBody, ResBody> tower_service::Service<http::Request<ReqBody>>
     for Service<DB, S, E>
 where
     S: tower_service::Service<
@@ -105,7 +92,8 @@ where
         Error = std::convert::Infallible,
     >,
     S::Future: Send + 'static,
-    E: From<Error> + IntoResponse,
+    E: IntoResponse,
+    sqlx::Error: Into<E>,
     ResBody: Body<Data = Bytes> + Send + 'static,
     ResBody::Error: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
 {
@@ -121,7 +109,7 @@ where
     }
 
     fn call(&mut self, mut req: http::Request<ReqBody>) -> Self::Future {
-        let transaction = TxSlot::bind(req.extensions_mut(), self.pool.clone());
+        let transaction = TxSlot::bind(req.extensions_mut(), self.state.clone());
 
         let res = self.inner.call(req);
 
@@ -130,9 +118,7 @@ where
 
             if !res.status().is_server_error() && !res.status().is_client_error() {
                 if let Err(error) = transaction.commit().await {
-                    return Ok(E::from(Error::Database { error })
-                        .into_response()
-                        .map(|body| body.map_err(axum_core::Error::new).boxed_unsync()));
+                    return Ok(error.into().into_response());
                 }
             }
 
@@ -143,18 +129,22 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::{Error, State};
+
     use super::Layer;
 
     // The trait shenanigans required by axum for layers are significant, so this "test" ensures
     // we've got it right.
     #[allow(unused, unreachable_code, clippy::diverging_sub_expression)]
     fn layer_compiles() {
-        let pool: sqlx::Pool<sqlx::Sqlite> = todo!();
+        let state: State<sqlx::Sqlite> = todo!();
+
+        let layer = Layer::<_, Error>::new(state);
 
         let app = axum::Router::new()
             .route("/", axum::routing::get(|| async { "hello" }))
-            .layer(Layer::new(pool));
+            .layer(layer);
 
-        axum::serve(todo!(), app.into_make_service());
+        axum::Server::bind(todo!()).serve(app.into_make_service());
     }
 }
