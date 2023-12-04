@@ -5,7 +5,9 @@ use std::marker::PhantomData;
 use axum_core::response::IntoResponse;
 use bytes::Bytes;
 use futures_core::future::BoxFuture;
-use http_body::{combinators::UnsyncBoxBody, Body};
+use http_body::Body;
+use http_body_util::combinators::UnsyncBoxBody;
+use http_body_util::BodyExt;
 
 use crate::{tx::TxSlot, Marker, State};
 
@@ -118,7 +120,10 @@ where
 
             if !res.status().is_server_error() && !res.status().is_client_error() {
                 if let Err(error) = transaction.commit().await {
-                    return Ok(error.into().into_response());
+                    return Ok(error
+                        .into()
+                        .into_response()
+                        .map(|body| body.map_err(axum_core::Error::new).boxed_unsync()));
                 }
             }
 

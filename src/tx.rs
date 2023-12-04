@@ -226,6 +226,15 @@ impl<DB: Marker> Lazy<DB> {
     }
 }
 
+impl<DB: Marker> Clone for Lazy<DB> {
+    fn clone(&self) -> Self {
+        Self {
+            state: self.state.clone(),
+            tx: self.tx.clone(),
+        }
+    }
+}
+
 impl<'c, DB, E> sqlx::Executor<'c> for &'c mut Tx<DB, E>
 where
     DB: Marker,
