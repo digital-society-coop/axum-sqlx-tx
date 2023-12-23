@@ -131,6 +131,47 @@ async fn extract_from_middleware_and_handler() {
 }
 
 #[tokio::test]
+async fn middleware_cloning_request_extensions() {
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+
+    async fn test_middleware(
+        req: http::Request<axum::body::Body>,
+        next: middleware::Next,
+    ) -> impl IntoResponse {
+        // Hold a clone of the request extensions
+        let _extensions = req.extensions().clone();
+
+        next.run(req).await
+    }
+
+    let (state, layer) = Tx::setup(pool);
+
+    let app = axum::Router::new()
+        .route("/", axum::routing::get(|_tx: Tx| async move {}))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            test_middleware,
+        ))
+        .layer(layer)
+        .with_state(state);
+
+    let response = app
+        .oneshot(
+            http::Request::builder()
+                .uri("/")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    dbg!(body);
+
+    assert!(status.is_success());
+}
+
+#[tokio::test]
 async fn substates() {
     #[derive(Clone)]
     struct MyState {

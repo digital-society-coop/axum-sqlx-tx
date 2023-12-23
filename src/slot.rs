@@ -26,35 +26,23 @@ impl<T> Slot<T> {
         Self(Arc::new(Mutex::new(Some(value))))
     }
 
-    /// Construct a new `Slot` and an immediately acquired `Lease`.
-    ///
-    /// This avoids the impossible `None` vs. calling `new()` then `lease()`.
-    pub(crate) fn new_leased(value: T) -> (Self, Lease<T>) {
-        let mut slot = Self::new(value);
-        let lease = slot.lease().expect("BUG: new slot empty");
-        (slot, lease)
-    }
-
     /// Lease the value from the slot, leaving it empty.
     ///
     /// Ownership of the contained value moves to the `Lease` for the duration. The value may return
     /// to the slot when the `Lease` is dropped, or the value may be "stolen", leaving the slot
     /// permanently empty.
-    pub(crate) fn lease(&mut self) -> Option<Lease<T>> {
+    pub(crate) fn lease(&self) -> Option<Lease<T>> {
         if let Some(value) = self.0.try_lock().and_then(|mut slot| slot.take()) {
             Some(Lease::new(value, Arc::downgrade(&self.0)))
         } else {
             None
         }
     }
+}
 
-    /// Get the inner value from the slot, if any.
-    ///
-    /// Note that if this returns `Some`, there are no oustanding leases. If it returns `None` then
-    /// the value has been leased, and since this consumes the slot the value will be dropped once
-    /// the lease is done.
-    pub(crate) fn into_inner(self) -> Option<T> {
-        self.0.try_lock().and_then(|mut slot| slot.take())
+impl<T> Clone for Slot<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
     }
 }
 
@@ -175,7 +163,7 @@ mod tests {
     #[test]
     fn lease_and_return() {
         // Create a slot containing a resource.
-        let mut slot = Slot::new("Hello".to_string());
+        let slot = Slot::new("Hello".to_string());
 
         // Lease the resource, taking it from the slot.
         let mut lease = slot.lease().unwrap();
@@ -196,12 +184,15 @@ mod tests {
         );
 
         // We can also take ownership of the value in the slot (if any)
-        assert_eq!(slot.into_inner(), Some("Hello, world!".to_string()));
+        assert_eq!(
+            slot.lease().map(|lease| lease.steal()),
+            Some("Hello, world!".to_string())
+        );
     }
 
     #[test]
     fn lease_and_steal() {
-        let mut slot = Slot::new("Hello".to_string());
+        let slot = Slot::new("Hello".to_string());
 
         let lease = slot.lease().unwrap();
         std::thread::spawn(move || {

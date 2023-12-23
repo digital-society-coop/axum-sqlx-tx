@@ -7,7 +7,7 @@ use bytes::Bytes;
 use futures_core::future::BoxFuture;
 use http_body::Body;
 
-use crate::{tx::TxSlot, Marker, State};
+use crate::{extension::Extension, Marker, State};
 
 /// A [`tower_layer::Layer`] that enables the [`Tx`] extractor.
 ///
@@ -109,7 +109,8 @@ where
     }
 
     fn call(&mut self, mut req: http::Request<ReqBody>) -> Self::Future {
-        let transaction = TxSlot::bind(req.extensions_mut(), self.state.clone());
+        let ext = Extension::new(self.state.clone());
+        req.extensions_mut().insert(ext.clone());
 
         let res = self.inner.call(req);
 
@@ -117,7 +118,7 @@ where
             let res = res.await.unwrap(); // inner service is infallible
 
             if !res.status().is_server_error() && !res.status().is_client_error() {
-                if let Err(error) = transaction.commit().await {
+                if let Err(error) = ext.resolve().await {
                     return Ok(error.into().into_response());
                 }
             }

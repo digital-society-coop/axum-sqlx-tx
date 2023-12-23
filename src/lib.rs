@@ -85,6 +85,7 @@
 
 mod config;
 mod error;
+mod extension;
 mod layer;
 mod marker;
 mod slot;
