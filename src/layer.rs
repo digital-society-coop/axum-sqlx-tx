@@ -5,9 +5,9 @@ use std::marker::PhantomData;
 use axum_core::response::IntoResponse;
 use bytes::Bytes;
 use futures_core::future::BoxFuture;
-use http_body::{combinators::UnsyncBoxBody, Body};
+use http_body::Body;
 
-use crate::{tx::TxSlot, Marker, State};
+use crate::{extension::Extension, Marker, State};
 
 /// A [`tower_layer::Layer`] that enables the [`Tx`] extractor.
 ///
@@ -97,7 +97,7 @@ where
     ResBody: Body<Data = Bytes> + Send + 'static,
     ResBody::Error: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
 {
-    type Response = http::Response<UnsyncBoxBody<ResBody::Data, axum_core::Error>>;
+    type Response = http::Response<axum_core::body::Body>;
     type Error = S::Error;
     type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
@@ -109,7 +109,8 @@ where
     }
 
     fn call(&mut self, mut req: http::Request<ReqBody>) -> Self::Future {
-        let transaction = TxSlot::bind(req.extensions_mut(), self.state.clone());
+        let ext = Extension::new(self.state.clone());
+        req.extensions_mut().insert(ext.clone());
 
         let res = self.inner.call(req);
 
@@ -117,12 +118,12 @@ where
             let res = res.await.unwrap(); // inner service is infallible
 
             if !res.status().is_server_error() && !res.status().is_client_error() {
-                if let Err(error) = transaction.commit().await {
+                if let Err(error) = ext.resolve().await {
                     return Ok(error.into().into_response());
                 }
             }
 
-            Ok(res.map(|body| body.map_err(axum_core::Error::new).boxed_unsync()))
+            Ok(res.map(axum_core::body::Body::new))
         })
     }
 }
@@ -145,6 +146,6 @@ mod tests {
             .route("/", axum::routing::get(|| async { "hello" }))
             .layer(layer);
 
-        axum::Server::bind(todo!()).serve(app.into_make_service());
+        axum::serve(todo!(), app);
     }
 }

@@ -63,7 +63,7 @@ use std::fmt::Debug;
 ///     .layer(layer1)
 ///     .layer(layer2)
 ///     .with_state(MyState { state1, state2 });
-/// # axum::Server::bind(todo!()).serve(app.into_make_service());
+/// # axum::serve(todo!(), app);
 /// # }
 /// ```
 pub trait Marker: Debug + Send + Sized + 'static {

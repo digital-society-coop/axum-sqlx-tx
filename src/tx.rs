@@ -1,6 +1,6 @@
 //! A request extension that enables the [`Tx`](crate::Tx) extractor.
 
-use std::marker::PhantomData;
+use std::{fmt, marker::PhantomData};
 
 use axum_core::{
     extract::{FromRef, FromRequestParts},
@@ -8,10 +8,10 @@ use axum_core::{
 };
 use futures_core::{future::BoxFuture, stream::BoxStream};
 use http::request::Parts;
-use sqlx::Transaction;
+use parking_lot::{lock_api::ArcMutexGuard, RawMutex};
 
 use crate::{
-    slot::{Lease, Slot},
+    extension::{Extension, LazyTransaction},
     Config, Error, Marker, State,
 };
 
@@ -73,9 +73,8 @@ use crate::{
 ///     /* ... */
 /// }
 /// ```
-#[derive(Debug)]
 pub struct Tx<DB: Marker, E = Error> {
-    tx: Lease<sqlx::Transaction<'static, DB::Driver>>,
+    tx: ArcMutexGuard<RawMutex, LazyTransaction<DB>>,
     _error: PhantomData<E>,
 }
 
@@ -122,20 +121,26 @@ impl<DB: Marker, E> Tx<DB, E> {
     ///
     /// **Note:** trying to use the `Tx` extractor again after calling `commit` will currently
     /// generate [`Error::OverlappingExtractors`] errors. This may change in future.
-    pub async fn commit(self) -> Result<(), sqlx::Error> {
-        self.tx.steal().commit().await
+    pub async fn commit(mut self) -> Result<(), sqlx::Error> {
+        self.tx.commit().await
+    }
+}
+
+impl<DB: Marker, E> fmt::Debug for Tx<DB, E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Tx").finish_non_exhaustive()
     }
 }
 
 impl<DB: Marker, E> AsRef<sqlx::Transaction<'static, DB::Driver>> for Tx<DB, E> {
     fn as_ref(&self) -> &sqlx::Transaction<'static, DB::Driver> {
-        &self.tx
+        self.tx.as_ref()
     }
 }
 
 impl<DB: Marker, E> AsMut<sqlx::Transaction<'static, DB::Driver>> for Tx<DB, E> {
     fn as_mut(&mut self) -> &mut sqlx::Transaction<'static, DB::Driver> {
-        &mut self.tx
+        self.tx.as_mut()
     }
 }
 
@@ -143,13 +148,13 @@ impl<DB: Marker, E> std::ops::Deref for Tx<DB, E> {
     type Target = sqlx::Transaction<'static, DB::Driver>;
 
     fn deref(&self) -> &Self::Target {
-        &self.tx
+        self.tx.as_ref()
     }
 }
 
 impl<DB: Marker, E> std::ops::DerefMut for Tx<DB, E> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.tx
+        self.tx.as_mut()
     }
 }
 
@@ -170,59 +175,15 @@ where
         'state: 'ctx,
     {
         Box::pin(async move {
-            let ext: &mut Lazy<DB> = parts.extensions.get_mut().ok_or(Error::MissingExtension)?;
+            let ext: &Extension<DB> = parts.extensions.get().ok_or(Error::MissingExtension)?;
 
-            let tx = ext.get_or_begin().await?;
+            let tx = ext.acquire().await?;
 
             Ok(Self {
                 tx,
                 _error: PhantomData,
             })
         })
-    }
-}
-
-/// The OG `Slot` – the transaction (if any) returns here when the `Extension` is dropped.
-pub(crate) struct TxSlot<DB: Marker>(Slot<Option<Slot<Transaction<'static, DB::Driver>>>>);
-
-impl<DB: Marker> TxSlot<DB> {
-    /// Create a `TxSlot` bound to the given request extensions.
-    ///
-    /// When the request extensions are dropped, `commit` can be called to commit the transaction
-    /// (if any).
-    pub(crate) fn bind(extensions: &mut http::Extensions, state: State<DB>) -> Self {
-        let (slot, tx) = Slot::new_leased(None);
-        extensions.insert(Lazy { state, tx });
-        Self(slot)
-    }
-
-    pub(crate) async fn commit(self) -> Result<(), sqlx::Error> {
-        if let Some(tx) = self.0.into_inner().flatten().and_then(Slot::into_inner) {
-            tx.commit().await?;
-        }
-        Ok(())
-    }
-}
-
-/// A lazily acquired transaction.
-///
-/// When the transaction is started, it's inserted into the `Option` leased from the `TxSlot`, so
-/// that when `Lazy` is dropped the transaction is moved to the `TxSlot`.
-struct Lazy<DB: Marker> {
-    state: State<DB>,
-    tx: Lease<Option<Slot<Transaction<'static, DB::Driver>>>>,
-}
-
-impl<DB: Marker> Lazy<DB> {
-    async fn get_or_begin(&mut self) -> Result<Lease<Transaction<'static, DB::Driver>>, Error> {
-        let tx = if let Some(tx) = self.tx.as_mut() {
-            tx
-        } else {
-            let tx = self.state.transaction().await?;
-            self.tx.insert(Slot::new(tx))
-        };
-
-        tx.lease().ok_or(Error::OverlappingExtractors)
     }
 }
 

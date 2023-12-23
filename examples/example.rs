@@ -28,10 +28,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         // Add the Tx state
         .with_state(state);
 
-    let server = axum::Server::bind(&([0, 0, 0, 0], 0).into()).serve(app.into_make_service());
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    println!("Listening on {}", listener.local_addr().unwrap());
 
-    println!("Listening on {}", server.local_addr());
-    server.await?;
+    axum::serve(listener, app).await?;
 
     Ok(())
 }
