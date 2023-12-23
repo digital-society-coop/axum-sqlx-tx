@@ -8,10 +8,10 @@ use axum_core::{
 };
 use futures_core::{future::BoxFuture, stream::BoxStream};
 use http::request::Parts;
+use parking_lot::{lock_api::ArcMutexGuard, RawMutex};
 
 use crate::{
     extension::{Extension, LazyTransaction},
-    slot::Lease,
     Config, Error, Marker, State,
 };
 
@@ -74,7 +74,7 @@ use crate::{
 /// }
 /// ```
 pub struct Tx<DB: Marker, E = Error> {
-    tx: Lease<LazyTransaction<DB>>,
+    tx: ArcMutexGuard<RawMutex, LazyTransaction<DB>>,
     _error: PhantomData<E>,
 }
 
@@ -121,8 +121,8 @@ impl<DB: Marker, E> Tx<DB, E> {
     ///
     /// **Note:** trying to use the `Tx` extractor again after calling `commit` will currently
     /// generate [`Error::OverlappingExtractors`] errors. This may change in future.
-    pub async fn commit(self) -> Result<(), sqlx::Error> {
-        self.tx.steal().commit().await
+    pub async fn commit(mut self) -> Result<(), sqlx::Error> {
+        self.tx.commit().await
     }
 }
 
@@ -134,13 +134,13 @@ impl<DB: Marker, E> fmt::Debug for Tx<DB, E> {
 
 impl<DB: Marker, E> AsRef<sqlx::Transaction<'static, DB::Driver>> for Tx<DB, E> {
     fn as_ref(&self) -> &sqlx::Transaction<'static, DB::Driver> {
-        self.tx.as_ref().as_ref()
+        self.tx.as_ref()
     }
 }
 
 impl<DB: Marker, E> AsMut<sqlx::Transaction<'static, DB::Driver>> for Tx<DB, E> {
     fn as_mut(&mut self) -> &mut sqlx::Transaction<'static, DB::Driver> {
-        self.tx.as_mut().as_mut()
+        self.tx.as_mut()
     }
 }
 
@@ -148,13 +148,13 @@ impl<DB: Marker, E> std::ops::Deref for Tx<DB, E> {
     type Target = sqlx::Transaction<'static, DB::Driver>;
 
     fn deref(&self) -> &Self::Target {
-        self.tx.as_ref().as_ref()
+        self.tx.as_ref()
     }
 }
 
 impl<DB: Marker, E> std::ops::DerefMut for Tx<DB, E> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.tx.as_mut().as_mut()
+        self.tx.as_mut()
     }
 }
 

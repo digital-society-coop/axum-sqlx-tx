@@ -31,7 +31,7 @@ bytes = "1"
 futures-core = "0.3"
 http = "1"
 http-body = "1"
-parking_lot = "0.12"
+parking_lot = { version = "0.12", features = ["arc_lock", "send_guard"] }
 sqlx = { version = "0.7", default-features = false }
 thiserror = "1"
 tower-layer = "0.3"

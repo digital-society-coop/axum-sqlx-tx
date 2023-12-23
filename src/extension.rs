@@ -1,31 +1,36 @@
+use std::sync::Arc;
+
+use parking_lot::{lock_api::ArcMutexGuard, Mutex, RawMutex};
 use sqlx::Transaction;
 
-use crate::{
-    slot::{Lease, Slot},
-    Error, Marker, State,
-};
+use crate::{Error, Marker, State};
 
 /// The request extension.
 pub(crate) struct Extension<DB: Marker> {
-    slot: Slot<LazyTransaction<DB>>,
+    slot: Arc<Mutex<LazyTransaction<DB>>>,
 }
 
 impl<DB: Marker> Extension<DB> {
     pub(crate) fn new(state: State<DB>) -> Self {
-        let slot = Slot::new(LazyTransaction::new(state));
+        let slot = Arc::new(Mutex::new(LazyTransaction::new(state)));
         Self { slot }
     }
 
-    pub(crate) async fn acquire(&self) -> Result<Lease<LazyTransaction<DB>>, Error> {
-        let mut tx = self.slot.lease().ok_or(Error::OverlappingExtractors)?;
+    pub(crate) async fn acquire(
+        &self,
+    ) -> Result<ArcMutexGuard<RawMutex, LazyTransaction<DB>>, Error> {
+        let mut tx = self
+            .slot
+            .try_lock_arc()
+            .ok_or(Error::OverlappingExtractors)?;
         tx.acquire().await?;
 
         Ok(tx)
     }
 
     pub(crate) async fn resolve(&self) -> Result<(), sqlx::Error> {
-        if let Some(tx) = self.slot.lease() {
-            tx.steal().resolve().await?;
+        if let Some(mut tx) = self.slot.try_lock_arc() {
+            tx.resolve().await?;
         }
         Ok(())
     }
@@ -49,6 +54,7 @@ enum LazyTransactionState<DB: Marker> {
     Acquired {
         tx: Transaction<'static, DB::Driver>,
     },
+    Resolved,
 }
 
 impl<DB: Marker> LazyTransaction<DB> {
@@ -62,6 +68,7 @@ impl<DB: Marker> LazyTransaction<DB> {
                 panic!("BUG: exposed unacquired LazyTransaction")
             }
             LazyTransactionState::Acquired { tx } => tx,
+            LazyTransactionState::Resolved => panic!("BUG: exposed resolved LazyTransaction"),
         }
     }
 
@@ -71,10 +78,11 @@ impl<DB: Marker> LazyTransaction<DB> {
                 panic!("BUG: exposed unacquired LazyTransaction")
             }
             LazyTransactionState::Acquired { tx } => tx,
+            LazyTransactionState::Resolved => panic!("BUG: exposed resolved LazyTransaction"),
         }
     }
 
-    async fn acquire(&mut self) -> Result<(), sqlx::Error> {
+    async fn acquire(&mut self) -> Result<(), Error> {
         match &self.0 {
             LazyTransactionState::Unacquired { state } => {
                 let tx = state.transaction().await?;
@@ -82,22 +90,24 @@ impl<DB: Marker> LazyTransaction<DB> {
                 Ok(())
             }
             LazyTransactionState::Acquired { .. } => Ok(()),
+            LazyTransactionState::Resolved => Err(Error::OverlappingExtractors),
         }
     }
 
-    pub(crate) async fn resolve(self) -> Result<(), sqlx::Error> {
-        match self.0 {
-            LazyTransactionState::Unacquired { .. } => Ok(()),
+    pub(crate) async fn resolve(&mut self) -> Result<(), sqlx::Error> {
+        match std::mem::replace(&mut self.0, LazyTransactionState::Resolved) {
+            LazyTransactionState::Unacquired { .. } | LazyTransactionState::Resolved => Ok(()),
             LazyTransactionState::Acquired { tx } => tx.commit().await,
         }
     }
 
-    pub(crate) async fn commit(self) -> Result<(), sqlx::Error> {
-        match self.0 {
+    pub(crate) async fn commit(&mut self) -> Result<(), sqlx::Error> {
+        match std::mem::replace(&mut self.0, LazyTransactionState::Resolved) {
             LazyTransactionState::Unacquired { .. } => {
                 panic!("BUG: tried to commit unacquired transaction")
             }
             LazyTransactionState::Acquired { tx } => tx.commit().await,
+            LazyTransactionState::Resolved => panic!("BUG: tried to commit resolved transaction"),
         }
     }
 }

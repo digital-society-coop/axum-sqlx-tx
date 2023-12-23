@@ -88,7 +88,6 @@ mod error;
 mod extension;
 mod layer;
 mod marker;
-mod slot;
 mod state;
 mod tx;
 
