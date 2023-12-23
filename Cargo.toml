@@ -39,8 +39,7 @@ tower-service = "0.3"
 
 [dev-dependencies]
 axum-sqlx-tx = { path = ".", features = ["runtime-tokio-rustls", "sqlite"] }
-axum = "0.7.1"
-http-body-util = "0.1.0"
+axum = "0.7.2"
 hyper = "1.0.1"
 tokio = { version = "1.17.0", features = ["macros", "rt-multi-thread"] }
 tower = "0.4.12"
