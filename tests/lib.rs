@@ -1,6 +1,5 @@
 use axum::{middleware, response::IntoResponse};
 use axum_sqlx_tx::State;
-use http_body_util::BodyExt;
 use sqlx::{sqlite::SqliteArguments, Arguments as _};
 use tower::ServiceExt;
 
@@ -124,7 +123,9 @@ async fn extract_from_middleware_and_handler() {
         .await
         .unwrap();
     let status = response.status();
-    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
 
     assert!(status.is_success());
     assert_eq!(body.as_ref(), b"[[1,\"bobby tables\"]]");
@@ -165,7 +166,9 @@ async fn middleware_cloning_request_extensions() {
         .await
         .unwrap();
     let status = response.status();
-    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     dbg!(body);
 
     assert!(status.is_success());
@@ -227,7 +230,9 @@ async fn missing_layer() {
 
     assert!(response.status().is_server_error());
 
-    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     assert_eq!(body, format!("{}", axum_sqlx_tx::Error::MissingExtension));
 }
 
@@ -296,7 +301,9 @@ async fn layer_error_override() {
         .await
         .unwrap();
     let status = response.status();
-    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
 
     assert!(status.is_client_error());
     assert_eq!(body, "internal server error");
@@ -443,7 +450,9 @@ where
         .await
         .unwrap();
     let status = response.status();
-    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
 
     (pool, Response { status, body })
 }
