@@ -209,6 +209,35 @@ async fn substates() {
 }
 
 #[tokio::test]
+async fn extract_pool_from_state() {
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+
+    let (state, layer) = Tx::setup(pool);
+
+    let app = axum::Router::new()
+        .route(
+            "/",
+            axum::routing::get(
+                |axum::extract::State(_pool): axum::extract::State<sqlx::SqlitePool>| async move {},
+            ),
+        )
+        .layer(layer)
+        .with_state(state);
+
+    let response = app
+        .oneshot(
+            http::Request::builder()
+                .uri("/")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert!(response.status().is_success());
+}
+
+#[tokio::test]
 async fn missing_layer() {
     let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
 

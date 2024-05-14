@@ -1,3 +1,5 @@
+use axum_core::extract::FromRef;
+
 use crate::Marker;
 
 /// Application state that enables the [`Tx`] extractor.
@@ -32,5 +34,11 @@ impl<DB: Marker> Clone for State<DB> {
         Self {
             pool: self.pool.clone(),
         }
+    }
+}
+
+impl<DB: Marker> FromRef<State<DB>> for sqlx::Pool<DB::Driver> {
+    fn from_ref(input: &State<DB>) -> Self {
+        input.pool.clone()
     }
 }

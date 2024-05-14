@@ -75,6 +75,20 @@
 //! It's not currently possible to use `Tx` for a dynamic number of databases. Feel free to open an
 //! issue if you have a requirement for this.
 //!
+//! ## Accessing the pool
+//!
+//! Note that [`State`] implements [`FromRef`](axum_core::extract::FromRef) into the inner SQLx pool. Therefore,
+//! if you still need to access the database pool at some handler, you can use axum's `State`
+//! extractor normally.
+//!
+//! ```
+//! use axum::extract::State;
+//!
+//! async fn this_still_works(State(pool): State<sqlx::SqlitePool>) {
+//!     /* ... */
+//! }
+//! ```
+//!
 //! # Examples
 //!
 //! See [`examples/`][examples] in the repo for more examples.
