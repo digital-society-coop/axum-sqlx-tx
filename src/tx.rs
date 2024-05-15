@@ -197,7 +197,7 @@ where
     type Database = DB::Driver;
 
     #[allow(clippy::type_complexity)]
-    fn fetch_many<'e, 'q: 'e, Q: 'q>(
+    fn fetch_many<'e, 'q: 'e, Q>(
         self,
         query: Q,
     ) -> BoxStream<
@@ -212,18 +212,18 @@ where
     >
     where
         'c: 'e,
-        Q: sqlx::Execute<'q, Self::Database>,
+        Q: sqlx::Execute<'q, Self::Database> + 'q,
     {
         (&mut ***self).fetch_many(query)
     }
 
-    fn fetch_optional<'e, 'q: 'e, Q: 'q>(
+    fn fetch_optional<'e, 'q: 'e, Q>(
         self,
         query: Q,
     ) -> BoxFuture<'e, Result<Option<<Self::Database as sqlx::Database>::Row>, sqlx::Error>>
     where
         'c: 'e,
-        Q: sqlx::Execute<'q, Self::Database>,
+        Q: sqlx::Execute<'q, Self::Database> + 'q,
     {
         (&mut ***self).fetch_optional(query)
     }
