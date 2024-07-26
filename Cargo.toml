@@ -1,7 +1,7 @@
 [package]
 name = "axum-sqlx-tx"
 description = "Request-scoped SQLx transactions for axum"
-version = "0.8.0"
+version = "0.9.0"
 license = "MIT"
 repository = "https://github.com/digital-society-coop/axum-sqlx-tx/"
 edition = "2021"
@@ -12,19 +12,6 @@ include = [
   "**/*.rs"
 ]
 
-[features]
-all-databases = ["any", "mysql", "postgres", "sqlite"]
-any = ["sqlx/any"]
-mysql = ["sqlx/mysql"]
-postgres = ["sqlx/postgres"]
-sqlite = ["sqlx/sqlite"]
-
-runtime-tokio-native-tls = ["sqlx/runtime-tokio-native-tls"]
-runtime-tokio-rustls = ["sqlx/runtime-tokio-rustls"]
-
-[package.metadata.docs.rs]
-features = ["all-databases", "runtime-tokio-rustls"]
-
 [dependencies]
 axum-core = "0.4"
 bytes = "1"
@@ -32,14 +19,14 @@ futures-core = "0.3"
 http = "1"
 http-body = "1"
 parking_lot = { version = "0.12", features = ["arc_lock", "send_guard"] }
-sqlx = { version = "0.7", default-features = false }
+sqlx = { version = "0.8", default-features = false }
 thiserror = "1"
 tower-layer = "0.3"
 tower-service = "0.3"
 
 [dev-dependencies]
-axum-sqlx-tx = { path = ".", features = ["runtime-tokio-rustls", "sqlite"] }
 axum = "0.7.2"
 hyper = "1.0.1"
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
 tokio = { version = "1.17.0", features = ["macros", "rt-multi-thread"] }
 tower = "0.4.12"

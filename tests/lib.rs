@@ -427,8 +427,8 @@ async fn multi_db() {
 
 async fn insert_user(tx: &mut Tx, id: i32, name: &str) -> (i32, String) {
     let mut args = SqliteArguments::default();
-    args.add(id);
-    args.add(name);
+    args.add(id).unwrap();
+    args.add(name).unwrap();
     sqlx::query_as_with(
         r#"INSERT INTO users VALUES (?, ?) RETURNING id, name;"#,
         args,
@@ -486,11 +486,13 @@ where
     (pool, Response { status, body })
 }
 
-struct MyExtractorError(axum_sqlx_tx::Error);
+struct MyExtractorError {
+    _0: axum_sqlx_tx::Error,
+}
 
 impl From<axum_sqlx_tx::Error> for MyExtractorError {
     fn from(error: axum_sqlx_tx::Error) -> Self {
-        Self(error)
+        Self { _0: error }
     }
 }
 
@@ -500,11 +502,13 @@ impl IntoResponse for MyExtractorError {
     }
 }
 
-struct MyLayerError(sqlx::Error);
+struct MyLayerError {
+    _0: sqlx::Error,
+}
 
 impl From<sqlx::Error> for MyLayerError {
     fn from(error: sqlx::Error) -> Self {
-        Self(error)
+        Self { _0: error }
     }
 }
 
