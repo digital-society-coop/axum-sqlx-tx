@@ -70,7 +70,8 @@
 /// #    .route("/", post(create_user))
 /// #    .layer(layer)
 /// #    .with_state(state);
-/// # axum::serve(todo!(), app);
+/// # let listener: tokio::net::TcpListener = todo!();
+/// # axum::serve(listener, app);
 /// # }
 /// # async fn create_user(mut tx: Tx, /* ... */) {
 /// #     /* ... */

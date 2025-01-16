@@ -63,7 +63,8 @@ use std::fmt::Debug;
 ///     .layer(layer1)
 ///     .layer(layer2)
 ///     .with_state(MyState { state1, state2 });
-/// # axum::serve(todo!(), app);
+/// # let listener: tokio::net::TcpListener = todo!();
+/// # axum::serve(listener, app);
 /// # }
 /// ```
 pub trait Marker: Debug + Send + Sized + 'static {
