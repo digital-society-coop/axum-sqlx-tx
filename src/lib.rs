@@ -35,7 +35,8 @@
 //! #   .route("/", axum::routing::get(|tx: Tx| async move {}))
 //!     .layer(layer)
 //!     .with_state(state);
-//! # axum::serve(todo!(), app);
+//! # let listener: tokio::net::TcpListener = todo!();
+//! # axum::serve(listener, app);
 //! # }
 //! ```
 //!

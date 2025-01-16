@@ -160,29 +160,20 @@ impl<DB: Marker, E> std::ops::DerefMut for Tx<DB, E> {
 
 impl<DB: Marker, S, E> FromRequestParts<S> for Tx<DB, E>
 where
-    E: From<Error> + IntoResponse,
+    S: Sync,
+    E: From<Error> + IntoResponse + Send,
     State<DB>: FromRef<S>,
 {
     type Rejection = E;
 
-    fn from_request_parts<'req, 'state, 'ctx>(
-        parts: &'req mut Parts,
-        _state: &'state S,
-    ) -> futures_core::future::BoxFuture<'ctx, Result<Self, Self::Rejection>>
-    where
-        Self: 'ctx,
-        'req: 'ctx,
-        'state: 'ctx,
-    {
-        Box::pin(async move {
-            let ext: &Extension<DB> = parts.extensions.get().ok_or(Error::MissingExtension)?;
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let ext: &Extension<DB> = parts.extensions.get().ok_or(Error::MissingExtension)?;
 
-            let tx = ext.acquire().await?;
+        let tx = ext.acquire().await?;
 
-            Ok(Self {
-                tx,
-                _error: PhantomData,
-            })
+        Ok(Self {
+            tx,
+            _error: PhantomData,
         })
     }
 }

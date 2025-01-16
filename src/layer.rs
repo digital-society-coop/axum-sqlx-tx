@@ -130,6 +130,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use tokio::net::TcpListener;
+
     use crate::{Error, State};
 
     use super::Layer;
@@ -146,6 +148,7 @@ mod tests {
             .route("/", axum::routing::get(|| async { "hello" }))
             .layer(layer);
 
-        axum::serve(todo!(), app);
+        let listener: TcpListener = todo!();
+        axum::serve(listener, app);
     }
 }
