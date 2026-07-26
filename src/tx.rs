@@ -9,6 +9,7 @@ use axum_core::{
 use futures_core::{future::BoxFuture, stream::BoxStream};
 use http::request::Parts;
 use parking_lot::{lock_api::ArcMutexGuard, RawMutex};
+use sqlx::SqlStr;
 
 use crate::{
     extension::{Extension, LazyTransaction},
@@ -219,20 +220,20 @@ where
         (&mut ***self).fetch_optional(query)
     }
 
-    fn prepare_with<'e, 'q: 'e>(
+    fn prepare_with<'e>(
         self,
-        sql: &'q str,
+        sql: SqlStr,
         parameters: &'e [<Self::Database as sqlx::Database>::TypeInfo],
-    ) -> BoxFuture<'e, Result<<Self::Database as sqlx::Database>::Statement<'q>, sqlx::Error>>
+    ) -> BoxFuture<'e, Result<<Self::Database as sqlx::Database>::Statement, sqlx::Error>>
     where
         'c: 'e,
     {
         (&mut ***self).prepare_with(sql, parameters)
     }
 
-    fn describe<'e, 'q: 'e>(
+    fn describe<'e>(
         self,
-        sql: &'q str,
+        sql: SqlStr,
     ) -> BoxFuture<'e, Result<sqlx::Describe<Self::Database>, sqlx::Error>>
     where
         'c: 'e,
